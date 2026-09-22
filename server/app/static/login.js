@@ -13,6 +13,10 @@
       <div><div class="ct">${title}</div><div class="cd">${text}</div></div></div>`;
   }
 
+  // A sign-in that failed comes back with the reason on the page itself.
+  const failure = $("msg").dataset.error;
+  if (failure) note("warn", "Aanmelden lukte niet", failure);
+
   fetch("/api/auth/methods").then((r) => r.json()).then((m) => {
     const host = $("methods");
     let html = "";

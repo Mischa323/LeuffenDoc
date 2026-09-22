@@ -21,6 +21,8 @@ explicit environment variable always wins over one of those.
 |---|---|
 | `DOC_PUBLIC_URL` | The address people reach this server at. Sign-in redirects are built from it. |
 | `DOC_RMM_URL` + `DOC_RMM_API_KEY` | Sign in through the RMM, and mirror its users, customers and permissions. The key is made under **Settings → API & webhooks** in the RMM. |
+| `DOC_RMM_PUBLIC_URL` | Where a *browser* reaches the RMM, when that differs from the address this server uses (an internal network, say). Defaults to `DOC_RMM_URL`. |
+| `DOC_SYNC_MINUTES` | How often to pull users and customers from the RMM. Default 15. |
 | `DOC_M365_TENANT` / `DOC_M365_CLIENT_ID` / `DOC_M365_CLIENT_SECRET` | Microsoft 365 sign-in, the fallback for when the RMM is unreachable. |
 | `DOC_BOOTSTRAP_ADMIN` | Addresses (comma separated) that are always administrators, whatever the database says — how a fresh install is set up, and the way back in if nobody is left with the rights. |
 | `DOC_SESSION_SECRET` | Signs session cookies. Generated into the data volume on first boot if unset. |
@@ -28,6 +30,36 @@ explicit environment variable always wins over one of those.
 | `DOC_TRUST_PROXY` | `1` behind a reverse proxy, so the audit log records the visitor rather than the proxy. `0` if the container is reachable directly. |
 | `DOC_PROXY_IPS` | The address(es) your proxy connects from. Forwarded headers are only believed from there. |
 | `DOC_DEV_LOGIN` | `1` allows a password-free sign-in. Development only; the first account to sign in becomes the administrator. |
+
+## Signing in
+
+Two ways, both ending in the same session cookie.
+
+**Through the RMM** (the normal way). The RMM is where accounts live, so it does
+the identifying: LeuffenDoc sends the browser there, the RMM recognises the
+session it already has — or asks the person to sign in, 2FA and IP rules
+included — and sends them back with a **single-use ticket**. LeuffenDoc redeems
+that ticket over its own connection using the API key, so a ticket left in a
+browser's history is worth nothing by itself. Their customers and whether they
+are an administrator come across in the same answer.
+
+Set up:
+
+1. In the RMM, **Settings → API & webhooks**, make a key that spans all
+   organisations, and put it in `DOC_RMM_API_KEY` with `DOC_RMM_URL`.
+2. On the RMM server, set `RMM_SSO_RETURN_URLS` to LeuffenDoc's address
+   (`https://doc.example.com`). Anything not on that list is refused: without
+   it the hand-off would send a valid ticket wherever a link said.
+
+**With Microsoft 365** — the fallback for when the RMM is unreachable, or for
+someone with no RMM account. They arrive with **no customers**; what they may
+see is granted here, since Microsoft 365 knows nothing about our customers. Add
+`https://doc.example.com/auth/m365/callback` as a redirect URI on the app
+registration (the RMM's own registration will do, with that URI added).
+
+Users, customers and access are pulled from the RMM every `DOC_SYNC_MINUTES`
+and whenever somebody signs in, so access withdrawn there disappears here.
+**Klanten** shows the state of that link, with a button to sync on the spot.
 
 ## Behind a reverse proxy
 

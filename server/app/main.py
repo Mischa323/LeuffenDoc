@@ -10,14 +10,19 @@ top of it, each in its own step.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
+import secrets
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, database
+from . import auth, database, m365, rmm
+
+log = logging.getLogger("leuffendoc")
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
@@ -35,10 +40,28 @@ def _version() -> str:
 VERSION = _version()
 
 
+SYNC_MINUTES = int(os.environ.get("DOC_SYNC_MINUTES", "15"))
+
+
+async def _sync_loop() -> None:
+    """Keep accounts and customers in step with the RMM. A sign-in refreshes
+    the person doing it; this is what catches everyone else -- someone who left,
+    or a customer that was renamed."""
+    while True:
+        try:
+            await asyncio.to_thread(rmm.sync)
+        except Exception as exc:                  # never let the loop die
+            log.warning("sync round failed: %r", exc)
+        await asyncio.sleep(max(60, SYNC_MINUTES * 60))
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     database.init_db()
+    task = asyncio.create_task(_sync_loop()) if rmm.configured() else None
     yield
+    if task:
+        task.cancel()
 
 
 app = FastAPI(title="LeuffenDoc", version=VERSION, lifespan=lifespan)
@@ -124,11 +147,97 @@ def login_page(request: Request):
 def auth_methods():
     """What the sign-in page should offer. The RMM path needs an address and an
     API key; Microsoft 365 needs an app registration."""
-    return {
-        "rmm": bool(os.environ.get("DOC_RMM_URL") or database.get_setting("DOC_RMM_URL")),
-        "m365": bool(os.environ.get("DOC_M365_CLIENT_ID") or database.get_setting("DOC_M365_CLIENT_ID")),
-        "dev": dev_login_enabled(),
-    }
+    return {"rmm": rmm.configured(), "m365": m365.configured(), "dev": dev_login_enabled()}
+
+
+# --------------------------------------------------------------------------- #
+# Signing in through the RMM
+#
+# The RMM knows who everyone is, so it does the identifying: it sends the
+# browser back here with a single-use ticket, and this server redeems that
+# ticket over its own connection, with its API key. A ticket picked out of a
+# browser's history is therefore worth nothing on its own.
+# --------------------------------------------------------------------------- #
+@app.get("/auth/rmm/start")
+def rmm_start(request: Request):
+    if not rmm.configured():
+        return JSONResponse({"detail": "De koppeling met de RMM is niet ingesteld"},
+                            status_code=404)
+    back = public_url("/auth/rmm/callback")
+    if not back.startswith("http"):
+        return JSONResponse({"detail": "DOC_PUBLIC_URL ontbreekt, dus de RMM weet niet "
+                                       "waar hij je naartoe moet sturen"}, status_code=500)
+    return RedirectResponse(rmm.handoff_url(back), status_code=303)
+
+
+@app.get("/auth/rmm/callback")
+def rmm_callback(request: Request, ticket: str = ""):
+    if not ticket:
+        return _sign_in_failed("Er kwam geen aanmeldbewijs terug van de RMM.")
+    try:
+        identity = rmm.exchange_ticket(ticket)
+        user = rmm.apply_identity(identity)
+    except PermissionError as exc:
+        return _sign_in_failed(str(exc))
+    except Exception as exc:
+        log.warning("RMM sign-in failed: %r", exc)
+        return _sign_in_failed("De RMM is nu niet bereikbaar. Probeer het zo nog eens, "
+                               "of meld je aan met Microsoft 365.")
+    response = RedirectResponse("/", status_code=303)
+    auth.sign_in(response, user["email"])
+    database.audit("sign-in", user_email=user["email"], detail="via de RMM",
+                   ip=auth.client_ip(request))
+    return response
+
+
+# --------------------------------------------------------------------------- #
+# Signing in with Microsoft 365 (the fallback)
+# --------------------------------------------------------------------------- #
+@app.get("/auth/m365/start")
+def m365_start(request: Request):
+    if not m365.configured():
+        return JSONResponse({"detail": "Microsoft 365 is niet ingesteld"}, status_code=404)
+    state = secrets.token_urlsafe(16)
+    response = RedirectResponse(m365.login_url(state), status_code=303)
+    response.set_cookie("m365_state", state, httponly=True, max_age=600,
+                        samesite="lax", secure=auth.cookie_kwargs()["secure"])
+    return response
+
+
+@app.get("/auth/m365/callback")
+def m365_callback(request: Request, code: str = "", state: str = ""):
+    if not state or request.cookies.get("m365_state") != state:
+        return _sign_in_failed("De aanmelding hoorde niet bij dit venster. Probeer opnieuw.")
+    try:
+        email = m365.exchange_code(code)
+    except Exception as exc:
+        return _sign_in_failed(str(exc))
+    if not m365.permitted(email):
+        return _sign_in_failed(f"{email} mag hier niet bij.")
+    existing = database.get_user(email)
+    # Someone Microsoft knows but the RMM does not gets in without customers;
+    # what they may see is granted here, since Microsoft 365 knows nothing about
+    # our customers. An existing account keeps the rights it already has.
+    user = database.upsert_user(email, display_name=existing.get("display_name") if existing else None,
+                                source=existing.get("source") if existing else "m365")
+    response = RedirectResponse("/", status_code=303)
+    auth.sign_in(response, user["email"])
+    response.delete_cookie("m365_state", path="/")
+    database.audit("sign-in", user_email=user["email"], detail="via Microsoft 365",
+                   ip=auth.client_ip(request))
+    return response
+
+
+def _sign_in_failed(message: str) -> HTMLResponse:
+    """Say what went wrong on the sign-in page itself, rather than dropping
+    someone on a bare error."""
+    from html import escape
+    html = open(os.path.join(STATIC_DIR, "login.html"), encoding="utf-8").read()
+    html = html.replace('<div id="msg"></div>',
+                        f'<div id="msg" data-error="{escape(message, quote=True)}"></div>')
+    for ext in (".js", ".css"):
+        html = html.replace(f'{ext}"', f'{ext}?v={VERSION}"')
+    return HTMLResponse(html, status_code=400)
 
 
 @app.post("/auth/dev-login")
@@ -200,6 +309,27 @@ async def create_org(request: Request, user: dict = Depends(auth.current_user)):
 def audit_log(org_id: str | None = None, user: dict = Depends(auth.current_user)):
     auth.require_admin(user)
     return database.list_audit(org_id)
+
+
+@app.get("/api/rmm/status")
+def rmm_status(user: dict = Depends(auth.current_user)):
+    """Whether the RMM link is set up, and how the last sync went."""
+    auth.require_admin(user)
+    return {"configured": rmm.configured(), "url": rmm.base_url() or None,
+            "every_minutes": SYNC_MINUTES, **rmm.last_sync}
+
+
+@app.post("/api/rmm/sync")
+async def rmm_sync_now(request: Request, user: dict = Depends(auth.current_user)):
+    """Sync on demand -- for right after someone's access changed in the RMM,
+    rather than waiting for the next round."""
+    auth.require_admin(user)
+    if not rmm.configured():
+        return JSONResponse({"detail": "De koppeling met de RMM is niet ingesteld"},
+                            status_code=400)
+    result = await asyncio.to_thread(rmm.sync)
+    database.audit("rmm.sync.manual", user_email=user["email"], ip=auth.client_ip(request))
+    return result
 
 
 # --------------------------------------------------------------------------- #

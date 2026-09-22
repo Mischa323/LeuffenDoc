@@ -133,6 +133,7 @@
         <div class="ic">${ICON.info}</div><div>
         <div class="ct">Je kunt geen klanten toevoegen</div>
         <div class="cd">Daar is beheerderstoegang voor nodig, en die heeft je account (<b class="mono">${esc(state.me.email)}</b>) niet. Vraag een beheerder, of zet je adres in <code>DOC_BOOTSTRAP_ADMIN</code>.</div></div></div>`;
+    const link = state.me.is_admin ? `<div id="rmm-status"></div>` : "";
     const add = state.me.is_admin ? `
       <div class="panel" id="new-org" style="padding:16px;margin-bottom:16px;display:none">
         <div style="display:flex;gap:8px;align-items:center">
@@ -141,13 +142,13 @@
           <button class="btn ghost sm" id="new-org-cancel">Annuleren</button>
         </div></div>` : "";
     if (!state.orgs.length) {
-      return note + add + `<div class="panel"><div class="empty"><div class="big">${ICON.building}</div>
+      return note + link + add + `<div class="panel"><div class="empty"><div class="big">${ICON.building}</div>
         <div>Nog geen klanten</div>
         <div style="font-size:12.5px;margin-top:6px">${state.me.is_admin
           ? "Maak er een aan — documentatie en wachtwoorden horen altijd bij een klant."
           : "Vraag een beheerder om je toegang te geven."}</div></div></div>`;
     }
-    return note + add + `<div class="cards">${state.orgs.map((o) => `
+    return note + link + add + `<div class="cards">${state.orgs.map((o) => `
       <div class="orgcard" data-org="${esc(o.id)}">
         <div class="oc-head">${orgMark(o.name)}
           <div><h3>${esc(o.name)}</h3>
@@ -266,6 +267,46 @@
       card.onclick = () => go(`#/klant/${card.dataset.org}`);
     });
     wireNewOrg();
+    showRmmLink();
+  }
+
+  // The customer list is where a customer that should have come from the RMM is
+  // missed, so it is where the state of that link belongs.
+  function ago(seconds) {
+    if (seconds < 90) return "zojuist";
+    const m = Math.round(seconds / 60);
+    if (m < 90) return `${m} min geleden`;
+    return `${Math.round(m / 60)} uur geleden`;
+  }
+
+  async function showRmmLink() {
+    const host = $("rmm-status");
+    if (!host) return;
+    let s;
+    try { s = await api("/api/rmm/status"); } catch (e) { return; }
+    if (!s.configured) {
+      host.innerHTML = `<div class="callout info" style="margin-bottom:16px">
+        <div class="ic">${ICON.info}</div><div>
+        <div class="ct">Niet gekoppeld aan de RMM</div>
+        <div class="cd">Met <code>DOC_RMM_URL</code> en <code>DOC_RMM_API_KEY</code> melden mensen zich aan met hun RMM-account, en komen klanten en toegang vanzelf mee.</div></div></div>`;
+      return;
+    }
+    const when = s.at ? ago(Date.now() / 1000 - s.at) : "nog niet";
+    const bad = s.ok === false;
+    host.innerHTML = `<div class="callout ${bad ? "warn" : "info"}" style="margin-bottom:16px">
+      <div class="ic">${bad ? ICON.alert : ICON.refresh}</div><div style="flex:1">
+      <div class="ct">${bad ? "De RMM antwoordt niet" : "Gekoppeld aan de RMM"}</div>
+      <div class="cd">${bad ? esc(s.detail) : `${s.users} gebruikers en ${s.orgs} klanten, bijgewerkt ${when}. Elke ${s.every_minutes} minuten opnieuw.`}
+        <button class="btn ghost sm" id="sync-now" style="margin-left:10px">Nu bijwerken</button></div>
+      </div></div>`;
+    $("sync-now").onclick = async () => {
+      $("sync-now").disabled = true;
+      try {
+        await api("/api/rmm/sync", { method: "POST" });
+        state.orgs = await api("/api/orgs");
+        render();
+      } catch (e) { alert(e.message); }
+    };
   }
 
   function wireNewOrg() {
