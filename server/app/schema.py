@@ -26,7 +26,9 @@ from __future__ import annotations
 #   text, textarea, number, date, select, mac, ip, bool, ref
 # A `ref` field holds the id of another item, of the kind named in `ref`.
 
-STATUS = ["In gebruik", "Reserve", "In reparatie", "Afgevoerd"]
+# Not "afgevoerd": equipment that is out of use is archived, and one fact
+# belongs in one place.
+STATUS = ["In gebruik", "Reserve", "In reparatie"]
 
 
 def _f(key, label, type="text", **extra):
@@ -43,7 +45,7 @@ COMPUTER = {
     "family": "configuratie",
     "sub": "Werkplekken, laptops, servers en NAS-en",
     # What a list shows at a glance.
-    "columns": ["role", "status", "os", "installed_at"],
+    "columns": ["role", "status", "os", "installed_at", "eol"],
     "groups": [
         {"key": "wat", "label": "Wat het is", "fields": [
             _f("role", "Soort", "select", options=["Werkplek", "Laptop", "Server",
@@ -68,7 +70,9 @@ COMPUTER = {
             _f("installed_by", "Geïnstalleerd door",
                hint="Wie de machine heeft opgeleverd. De RMM weet dit niet."),
             _f("purchased_at", "Aangeschaft op", "date"),
-            _f("warranty_until", "Garantie tot", "date"),
+            _f("warranty_until", "Garantie tot", "date", expiry=True),
+            _f("eol", "Verloopt op", "date", expiry=True,
+               hint="Wanneer dit apparaat vervangen of afgeschreven moet zijn. Verlopen apparatuur staat bovenaan het klantoverzicht."),
             _f("notes", "Notities", "textarea"),
         ]},
     ],
@@ -81,7 +85,7 @@ NETWORK = {
     "family": "configuratie",
     "sub": "Switches, firewalls, routers en access points",
     # What a list shows at a glance.
-    "columns": ["role", "status", "mgmt_ip"],
+    "columns": ["role", "status", "mgmt_ip", "eol"],
     "groups": [
         {"key": "wat", "label": "Wat het is", "fields": [
             _f("role", "Soort", "select",
@@ -101,7 +105,9 @@ NETWORK = {
         {"key": "beheer", "label": "Beheer", "fields": [
             _f("installed_at", "Geïnstalleerd op", "date"),
             _f("installed_by", "Geïnstalleerd door"),
-            _f("warranty_until", "Garantie tot", "date"),
+            _f("warranty_until", "Garantie tot", "date", expiry=True),
+            _f("eol", "Verloopt op", "date", expiry=True,
+               hint="Wanneer dit apparaat vervangen of afgeschreven moet zijn. Verlopen apparatuur staat bovenaan het klantoverzicht."),
             _f("notes", "Notities", "textarea"),
         ]},
     ],
@@ -114,7 +120,7 @@ PRINTER = {
     "family": "configuratie",
     "sub": "Printers en multifunctionals",
     # What a list shows at a glance.
-    "columns": ["status", "placement", "mgmt_ip"],
+    "columns": ["status", "placement", "eol"],
     "groups": [
         {"key": "wat", "label": "Wat het is", "fields": [
             _f("status", "Status", "select", options=STATUS),
@@ -132,7 +138,9 @@ PRINTER = {
         {"key": "beheer", "label": "Beheer", "fields": [
             _f("installed_at", "Geïnstalleerd op", "date"),
             _f("installed_by", "Geïnstalleerd door"),
-            _f("warranty_until", "Garantie tot", "date"),
+            _f("warranty_until", "Garantie tot", "date", expiry=True),
+            _f("eol", "Verloopt op", "date", expiry=True,
+               hint="Wanneer dit apparaat vervangen of afgeschreven moet zijn. Verlopen apparatuur staat bovenaan het klantoverzicht."),
             _f("notes", "Notities", "textarea"),
         ]},
     ],
@@ -164,7 +172,7 @@ INTERNET = {
         ]},
         {"key": "contract", "label": "Contract", "fields": [
             _f("account_number", "Klant- of circuitnummer"),
-            _f("contract_until", "Contract tot", "date"),
+            _f("contract_until", "Contract tot", "date", expiry=True),
             _f("notice_period", "Opzegtermijn"),
             _f("monthly", "Bedrag per maand"),
         ]},

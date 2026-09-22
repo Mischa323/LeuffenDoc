@@ -448,7 +448,7 @@ def create_item(org_id: str, kind: str, name: str, fields: dict, by: str | None,
 def update_item(item_id: str, name: str | None = None, fields: dict | None = None,
                 by: str | None = None, source: str = "manual",
                 rmm: dict | None = None, rmm_gone: bool | None = None,
-                label=None) -> dict:
+                rmm_keys=None, label=None) -> dict:
     """Apply a change and record exactly what moved.
 
     `fields` is merged, not replaced: a form that sends one group of fields must
@@ -474,6 +474,13 @@ def update_item(item_id: str, name: str | None = None, fields: dict | None = Non
         sets = ["name=?", "fields_json=?", "updated_at=?", "updated_by=?"]
         args: list = [after_name, json.dumps(after_fields), now, by]
         if rmm is not None:
+            # What the RMM reports is history too: "memory 8 -> 16 GB" is worth
+            # having, and nobody had to keep it up. Only the keys that are
+            # fields of this kind are compared, so the rest of the payload
+            # (hostname, adapters, when it was last seen) stays out of it.
+            before_rmm = json.loads(r["rmm_json"] or "{}")
+            changes += _diff({k: before_rmm.get(k) for k in (rmm_keys or [])},
+                             {k: rmm.get(k) for k in (rmm_keys or [])}, label)
             sets += ["rmm_json=?", "rmm_seen_at=?", "rmm_gone=0"]
             args += [json.dumps(rmm), now]
         if rmm_gone is not None:
@@ -522,6 +529,25 @@ def get_revision(revision_id: int) -> dict | None:
     r = dict(r)
     r["changes"] = json.loads(r.pop("changes_json", None) or "[]")
     return r
+
+
+def rmm_items() -> list:
+    """Every item that mirrors a device in the RMM."""
+    return [_item_out(r) for r in
+            rows("SELECT * FROM items WHERE source='rmm' AND rmm_device_id IS NOT NULL")]
+
+
+def mark_rmm_gone(item_id: str, gone: bool) -> None:
+    """A device that left the RMM keeps its page -- the documentation hanging
+    off it is usually exactly what you want afterwards -- but says so, and says
+    so in its history as well."""
+    now = time.time()
+    with write() as conn:
+        conn.execute("UPDATE items SET rmm_gone=?, updated_at=? WHERE id=?",
+                     (int(gone), now, item_id))
+        conn.execute("INSERT INTO revisions (item_id, at, user_email, source, action, "
+                     "changes_json) VALUES (?, ?, NULL, 'rmm', ?, '[]')",
+                     (item_id, now, "rmm-gone" if gone else "rmm-back"))
 
 
 # --------------------------------------------------------------------------- #

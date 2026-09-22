@@ -208,7 +208,22 @@
     const summary = await api(`/api/orgs/${o.id}/summary`).catch(() => ({ counts: {} }));
     const counts = summary.counts || {};
     const sections = ORG.filter((t) => t.id !== "overzicht");
-    return `<div class="panel" style="padding:20px;margin-bottom:16px">
+
+    // Dates only earn their keep if they come and find you.
+    const due = await Items.expiring(o.id).catch(() => []);
+    const dueBlock = due.length ? `<div class="callout warn" style="margin-bottom:16px">
+        <div class="ic">${ICON.clock}</div><div style="flex:1">
+        <div class="ct">${due.length === 1 ? "Er loopt iets af" : `Er lopen ${due.length} dingen af`}</div>
+        <div class="cd"><div class="due-list">${due.slice(0, 8).map((d) => `
+          <div class="due-row" data-item="${esc(d.item.id)}">
+            <span class="due-name">${esc(d.item.name)}</span>
+            <span class="muted">${esc(d.field.label.toLowerCase())}</span>
+            <span class="tag warn">${esc(d.flag.text)}</span>
+            <span class="muted">${new Date(d.on).toLocaleDateString("nl-NL")}</span>
+          </div>`).join("")}</div>
+          ${due.length > 8 ? `<div class="muted" style="margin-top:8px">en nog ${due.length - 8}</div>` : ""}
+        </div></div></div>` : "";
+    return dueBlock + `<div class="panel" style="padding:20px;margin-bottom:16px">
         <div class="org-head">
           <span class="mark" style="background:hsl(${h} 55% 45%)">${esc(initials)}</span>
           <div><h3>${esc(o.name)}</h3>
@@ -335,6 +350,9 @@
         $("view").innerHTML = await overviewView();
         $("view").querySelectorAll("[data-tab]").forEach((el) => {
           el.onclick = () => go(`#/klant/${state.org.id}/${el.dataset.tab}`);
+        });
+        $("view").querySelectorAll(".due-row").forEach((el) => {
+          el.onclick = () => go(`#/klant/${state.org.id}/item/${el.dataset.item}`);
         });
         return;
       }

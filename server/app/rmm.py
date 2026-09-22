@@ -22,13 +22,13 @@ import urllib.parse
 
 import httpx
 
-from . import database
+from . import database, schema
 
 log = logging.getLogger("leuffendoc.rmm")
 
 # What the last sync did, for the status shown in the interface.
 last_sync: dict = {"at": None, "ok": None, "detail": "nog niet uitgevoerd",
-                   "users": 0, "orgs": 0}
+                   "users": 0, "orgs": 0, "devices": 0}
 
 
 def _setting(key: str) -> str:
@@ -159,7 +159,163 @@ def sync() -> dict:
             apply_identity(identity)
         except Exception as exc:
             log.warning("could not apply %s: %r", identity.get("email"), exc)
+    # Devices last: they land in the customers the round above just created.
+    # A failure here does not undo the accounts and customers that did arrive,
+    # which is the difference between a partly useful sync and a useless one.
+    try:
+        devices = sync_devices()
+    except Exception as exc:
+        log.warning("syncing devices from the RMM failed: %r", exc)
+        last_sync.update(at=time.time(), ok=False, users=len(users), orgs=len(orgs),
+                         detail=f"gebruikers en klanten gelukt, apparaten niet: {_explain(exc)}")
+        return last_sync
     last_sync.update(at=time.time(), ok=True, detail="gelukt",
-                     users=len(users), orgs=len(orgs))
-    database.audit("rmm.sync", detail=f"{len(users)} gebruikers, {len(orgs)} klanten")
+                     users=len(users), orgs=len(orgs), devices=devices["devices"])
+    database.audit("rmm.sync", detail=f"{len(users)} gebruikers, {len(orgs)} klanten, "
+                                      f"{devices['devices']} apparaten "
+                                      f"({devices['new']} nieuw, {devices['gone']} verdwenen)")
     return last_sync
+
+
+# --------------------------------------------------------------------------- #
+# Devices becoming configurations
+#
+# If the RMM is there, it already knows what is in a machine. Typing that in a
+# second time produces two answers to the same question, and the documented one
+# is the one that goes stale. So every device becomes a configuration here, its
+# hardware is shown from the RMM and kept in step, and what the RMM cannot know
+# -- when it was installed and by whom, which switch port, the warranty -- is
+# yours to fill in on the same page.
+#
+# Without an RMM none of this runs and every field is simply typed, which is
+# what an installation of LeuffenDoc on its own looks like.
+# --------------------------------------------------------------------------- #
+def fetch_devices() -> list[dict]:
+    with _client() as client:
+        r = client.get(f"{base_url()}/api/v1/devices")
+    r.raise_for_status()
+    return r.json().get("devices", [])
+
+
+def _bytes(value) -> str:
+    """A size as somebody says it out loud, not as a number of bytes."""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if n <= 0:
+        return ""
+    for unit, step in (("TB", 1024 ** 4), ("GB", 1024 ** 3), ("MB", 1024 ** 2)):
+        if n >= step:
+            size = n / step
+            text = f"{size:.1f}".rstrip("0").rstrip(".") if size < 100 else f"{round(size)}"
+            return f"{text.replace('.', ',')} {unit}"
+    return f"{int(n)} B"
+
+
+def _storage(disks: list) -> str:
+    parts = []
+    for disk in disks or []:
+        size = _bytes(disk.get("total"))
+        if not size:
+            continue
+        where = (disk.get("mount") or "").rstrip("\\")
+        parts.append(f"{size} ({where})" if where else size)
+    return " + ".join(parts)
+
+
+def _os(device: dict) -> str:
+    """The operating system with its version, without saying it twice -- the
+    RMM's own name for a Home Assistant box already carries its version."""
+    name = (device.get("os") or "").strip()
+    version = (device.get("os_version") or "").strip()
+    if version and version.lower() not in name.lower():
+        return f"{name} {version}".strip()
+    return name
+
+
+def _role(device: dict) -> str:
+    """A starting guess at what kind of machine this is. It is written once, at
+    the moment the configuration is created, and never again: after that it is
+    whatever the person who looked at it says it is."""
+    name = f"{device.get('os') or ''} {device.get('os_version') or ''}".lower()
+    if "synology" in name or "dsm" in name or "truenas" in name:
+        return "NAS"
+    if device.get("is_server") or device.get("os_kind") == "windows_server":
+        return "Server"
+    if "home assistant" in name:
+        return "Server"
+    if device.get("os_kind") == "linux":
+        return "Server"
+    return "Werkplek"
+
+
+def device_payload(device: dict) -> dict:
+    """What the RMM knows, under the names the field catalogue uses.
+
+    Anything beyond those names (the adapters, when it was last seen) rides
+    along for the pages that need it and is deliberately left out of the
+    comparison that writes the history.
+    """
+    return {
+        "cpu": device.get("cpu") or "",
+        "memory": _bytes(device.get("ram_total")),
+        "storage": _storage(device.get("disks")),
+        "os": _os(device),
+        "manufacturer": device.get("manufacturer") or "",
+        "model": device.get("model") or "",
+        "serial": device.get("serial") or "",
+        # Not fields, but what the rest of the page and the adapters need.
+        "device_id": device.get("id"),
+        "hostname": device.get("hostname"),
+        "online": bool(device.get("online")),
+        "last_seen": device.get("last_seen"),
+        "ip": device.get("ip"),
+        "mac": device.get("mac"),
+        "agent_version": device.get("agent_version"),
+        "nics": device.get("nics") or [],
+    }
+
+
+def sync_devices() -> dict:
+    """Mirror every device the API key can see into the right customer."""
+    devices = fetch_devices()
+    by_rmm_org = {o["rmm_org_id"]: o["id"] for o in database.list_orgs() if o.get("rmm_org_id")}
+    keys = [f["key"] for f in schema.fields_of("computer").values() if f.get("rmm")]
+    label = lambda key: schema.label_of("computer", key)     # noqa: E731
+
+    made = updated = 0
+    seen = set()
+    for device in devices:
+        org = (device.get("org") or {}).get("id")
+        org_id = by_rmm_org.get(org)
+        if not org_id or not device.get("id"):
+            continue                       # a customer this side does not have
+        seen.add(device["id"])
+        payload = device_payload(device)
+        existing = database.item_by_rmm_device(device["id"])
+        if existing:
+            database.update_item(existing["id"], rmm=payload, rmm_keys=keys,
+                                 by=None, source="rmm", label=label)
+            updated += 1
+        else:
+            # The name and the kind of machine are a starting point, not a
+            # standing instruction: rename it here and the next sync leaves it
+            # alone, because only the RMM's own fields are refreshed.
+            database.create_item(org_id, "computer", device.get("hostname") or device["id"],
+                                 {"role": _role(device), "status": "In gebruik"},
+                                 by=None, source="rmm", rmm_device_id=device["id"],
+                                 rmm=payload, label=label)
+            made += 1
+
+    # A device that is no longer in the RMM keeps its page and says so. It is
+    # never removed here: what was documented about it is usually exactly what
+    # somebody needs afterwards.
+    gone = 0
+    for item in database.rmm_items():
+        missing = item["rmm_device_id"] not in seen
+        if missing != item["rmm_gone"]:
+            database.mark_rmm_gone(item["id"], missing)
+        if missing:
+            gone += 1
+    return {"devices": len(seen), "new": made, "updated": updated, "gone": gone}

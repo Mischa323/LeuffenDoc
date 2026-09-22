@@ -62,6 +62,31 @@ window.DocItems = function (ctx) {
     return String(raw);
   }
 
+  /* A date that has run out, or is about to. Sixty days is roughly the notice
+     you need to do something about it: order a replacement, or ring the
+     provider before the contract renews itself. */
+  function expiry(field, value) {
+    if (!field.expiry || !value) return null;
+    const parts = String(value).split("-").map(Number);
+    if (parts.length !== 3 || parts.some(isNaN)) return null;
+    const on = new Date(parts[0], parts[1] - 1, parts[2]);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const days = Math.round((on - today) / 86400000);
+    if (days < 0) return { kind: "warn", text: "verlopen" };
+    if (days <= 60) return { kind: "warn", text: days === 0 ? "vandaag" : `nog ${days} ${days === 1 ? "dag" : "dagen"}` };
+    return null;
+  }
+
+  // A value as it appears in a table cell or on a page: the text, plus the
+  // warning that makes a date worth having in the first place.
+  function cell(item, field, all) {
+    const text = display(item, field, all);
+    if (!text) return "";
+    const flag = expiry(field, valueOf(item, field));
+    return esc(text) + (flag ? ` <span class="tag ${flag.kind}">${esc(flag.text)}</span>` : "");
+  }
+
   function inputFor(field, value, all, orgId) {
     const id = `f-${field.key}`;
     if (field.rmm) {
@@ -72,9 +97,13 @@ window.DocItems = function (ctx) {
       return `<textarea class="inp" id="${id}" data-key="${field.key}" rows="3">${esc(value)}</textarea>`;
     }
     if (field.type === "select") {
+      // Something written before an option was retired must not disappear the
+      // moment somebody opens the form for an unrelated reason.
+      const options = field.options.includes(value) || !value
+        ? field.options : [...field.options, value];
       return `<select class="inp" id="${id}" data-key="${field.key}">
         <option value=""></option>
-        ${field.options.map((o) => `<option${String(o) === String(value) ? " selected" : ""}>${esc(o)}</option>`).join("")}
+        ${options.map((o) => `<option${String(o) === String(value) ? " selected" : ""}>${esc(o)}</option>`).join("")}
       </select>`;
     }
     if (field.type === "bool") {
@@ -156,7 +185,7 @@ window.DocItems = function (ctx) {
       (columnsOf(allowed[0]).find((c) => c.key === k) || {}).label || k);
     const sharedCell = (item, key) => {
       const field = fieldsOf(item.kind).find((f) => f.key === key);
-      return field ? display(item, field, all) : "";
+      return field ? cell(item, field, all) : "";
     };
     const table = items.length ? `<div class="panel"><table class="grid"><thead><tr>
         <th>Naam</th>${kind ? "" : "<th>Soort</th>"}
@@ -167,8 +196,8 @@ window.DocItems = function (ctx) {
           <td><b>${esc(i.name)}</b>${i.archived ? ' <span class="tag">afgevoerd</span>' : ""}
             ${i.rmm_gone ? ' <span class="tag warn">niet meer in de RMM</span>' : ""}</td>
           ${kind ? "" : `<td><span class="kind-cell">${ICON[KINDS[i.kind].icon]} ${esc(KINDS[i.kind].label)}</span></td>`}
-          ${cols.map((c) => `<td>${esc(display(i, c, all)) || "—"}</td>`).join("")}
-          ${shared.map((k) => `<td>${esc(sharedCell(i, k)) || "—"}</td>`).join("")}
+          ${cols.map((c) => `<td>${cell(i, c, all) || "—"}</td>`).join("")}
+          ${shared.map((k) => `<td>${sharedCell(i, k) || "—"}</td>`).join("")}
           <td class="right">${i.source === "rmm" ? '<span class="tag">RMM</span>' : ""}</td>
         </tr>`).join("")}
       </tbody></table></div>`
@@ -283,7 +312,7 @@ window.DocItems = function (ctx) {
         const text = display(item, f, all);
         if (!text) return "";
         const ref = f.type === "ref" && item.fields[f.key]
-          ? `<a data-goto="${esc(item.fields[f.key])}">${esc(text)}</a>` : esc(text);
+          ? `<a data-goto="${esc(item.fields[f.key])}">${esc(text)}</a>` : cell(item, f, all);
         return `<div class="dt">${esc(f.label)}${f.rmm ? ' <span class="tag sm">RMM</span>' : ""}</div>
                 <div class="dd">${ref}</div>`;
       }).join("");
@@ -298,12 +327,21 @@ window.DocItems = function (ctx) {
       </div></div>`;
 
     const draw = async () => {
-      host.innerHTML = head()
+      const goneNote = item.rmm_gone ? `<div class="callout warn" style="margin-bottom:14px">
+          <div class="ic">${ICON.alert}</div><div style="flex:1">
+          <div class="ct">Dit apparaat staat niet meer in de RMM</div>
+          <div class="cd">Sinds ${when(item.rmm_seen_at)}. De pagina blijft staan — wat je erover
+            hebt vastgelegd is meestal juist dan nog nodig. Is de machine weg, voer hem dan af.
+            ${item.archived ? "" : `<button class="btn ghost sm" id="gone-archive" style="margin-left:10px">${ICON.box} Afvoeren</button>`}</div>
+          </div></div>` : "";
+      host.innerHTML = head() + (editing ? "" : goneNote)
         + (editing ? `<div id="edit-fields">${formHtml(item.kind, item, all, org.id)}</div>
              <div class="form-foot"><button class="btn ghost" id="edit-cancel">Annuleren</button>
                <button class="btn" id="edit-save">${ICON.save} Opslaan</button></div>`
                    : readBlocks() + `<div id="related"></div><div id="history"></div>`);
       wireHead();
+      const goneBtn = host.querySelector("#gone-archive");
+      if (goneBtn) goneBtn.onclick = () => host.querySelector("#btn-archive").click();
       if (editing) {
         host.querySelector("#edit-cancel").onclick = () => { editing = false; draw(); };
         host.querySelector("#edit-save").onclick = saveEdit;
@@ -412,7 +450,8 @@ window.DocItems = function (ctx) {
       const slot = host.querySelector("#history");
       const revisions = await api(`/api/items/${item.id}/revisions`).catch(() => []);
       const word = { created: "aangemaakt", updated: "gewijzigd",
-                     archived: "afgevoerd", restored: "teruggezet" };
+                     archived: "afgevoerd", restored: "teruggezet",
+                     "rmm-gone": "verdween uit de RMM", "rmm-back": "staat weer in de RMM" };
       slot.innerHTML = `<div class="panel">
           <div class="panel-head"><h2>Geschiedenis</h2>
             <span class="sub">Wie wat veranderde, en waarin</span></div>
@@ -421,7 +460,9 @@ window.DocItems = function (ctx) {
               <b>${esc(r.user_email || "de RMM")}</b>
               <span class="muted">${esc(word[r.action] || r.action)}</span>
               <span class="muted">${when(r.at)}</span>
-              ${r.changes.length ? `<button class="btn ghost sm" data-revert="${r.id}">${ICON.restart} Terugdraaien</button>` : ""}
+              ${r.changes.length && r.action === "updated"
+                ? `<button class="btn ghost sm" data-revert="${r.id}">${ICON.restart} Terugdraaien</button>`
+                : ""}
             </div>
             ${r.changes.map((c) => `<div class="rev-change">
               <span class="rc-field">${esc(c.label)}</span>
@@ -448,9 +489,25 @@ window.DocItems = function (ctx) {
     return item;
   }
 
+  /* What is about to run out, across everything this customer has. The point
+     of a date is being told about it, not being able to look it up. */
+  async function expiring(orgId) {
+    await kinds();
+    const all = await index(orgId);
+    const out = [];
+    for (const item of all) {
+      if (item.archived) continue;
+      for (const field of fieldsOf(item.kind)) {
+        const flag = expiry(field, valueOf(item, field));
+        if (flag) out.push({ item, field, flag, on: valueOf(item, field) });
+      }
+    }
+    return out.sort((a, b) => String(a.on).localeCompare(String(b.on)));
+  }
+
   async function itemName(itemId) {
     try { return (await api(`/api/items/${itemId}`)).name; } catch (e) { return null; }
   }
 
-  return { kinds, index, forget, listView, detailView, openCreate, itemName };
+  return { kinds, index, forget, listView, detailView, openCreate, expiring, itemName };
 };

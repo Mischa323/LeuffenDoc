@@ -101,6 +101,14 @@
     .rc-from { color: var(--text-faint); text-decoration: line-through; }
     .rc-arrow { color: var(--text-faint); }
     .rc-to { font-weight: 550; }
+
+    /* ---- what runs out soon ---- */
+    .due-list { margin-top: 8px; display: grid; gap: 5px; }
+    .due-row { display: flex; align-items: center; gap: 10px; cursor: pointer;
+               padding: 4px 0; font-size: 12.5px; }
+    .due-row:hover .due-name { text-decoration: underline; }
+    .due-name { font-weight: 600; min-width: 160px; }
+    .due-row .muted:last-child { margin-left: auto; }
   </style>
 </head>
 <body>
