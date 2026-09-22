@@ -68,6 +68,42 @@ def version():
     return {"version": VERSION}
 
 
+def public_url(path: str = "") -> str:
+    """An absolute URL back to this server.
+
+    Built from `DOC_PUBLIC_URL`, never from the incoming request: behind a
+    reverse proxy the request arrives as plain HTTP on an internal name, so
+    anything built from it would send people to an address that doesn't work --
+    which is exactly what breaks a sign-in redirect.
+    """
+    base = (os.environ.get("DOC_PUBLIC_URL") or database.get_setting("DOC_PUBLIC_URL") or "").rstrip("/")
+    return f"{base}{path}" if base else path
+
+
+@app.get("/api/diagnostics")
+def diagnostics(request: Request, user: dict = Depends(auth.current_user)):
+    """What the server sees of the connection -- the quickest way to tell
+    whether the reverse proxy in front of it is passing its headers on."""
+    auth.require_admin(user)
+    hops = auth.forwarded_hops(request)
+    return {
+        "version": VERSION,
+        "public_url": public_url() or None,
+        "trust_proxy": auth.trust_proxy(),
+        "proxy_ips": os.environ.get("DOC_PROXY_IPS", "*"),
+        # Who we think you are, and the raw material that answer came from.
+        "client_ip": auth.client_ip(request),
+        "forwarded_for": ", ".join(hops) or None,
+        # More than one hop means the proxy appends rather than replaces, and
+        # the oldest entry came from the visitor's own browser.
+        "forwarded_hops": len(hops),
+        "forwarded_proto": request.headers.get("x-forwarded-proto"),
+        "scheme": request.url.scheme,
+        "host": request.headers.get("host"),
+        "secure_cookies": os.environ.get("DOC_SECURE_COOKIES", "1") not in ("0", "false", "no"),
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Signing in
 # --------------------------------------------------------------------------- #
@@ -104,9 +140,12 @@ async def dev_login(request: Request):
     if not email or "@" not in email:
         return JSONResponse({"detail": "An email address is required"}, status_code=400)
     # The first account to arrive administers the place; everyone after is not
-    # an administrator until someone makes them one.
+    # an administrator until someone makes them one. Note the None: passing
+    # False here would strip the administrator of their rights on their *second*
+    # sign-in, since upsert_user reads False as "set it to no".
     first = database.user_count() == 0
-    database.upsert_user(email, display_name=email.split("@")[0], is_admin=first, source="local")
+    database.upsert_user(email, display_name=email.split("@")[0],
+                         is_admin=True if first else None, source="local")
     response = JSONResponse({"status": "ok", "email": email, "is_admin": first})
     auth.sign_in(response, email)
     database.audit("sign-in", user_email=email, detail="development sign-in",

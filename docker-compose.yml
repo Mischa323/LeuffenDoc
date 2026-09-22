@@ -8,9 +8,22 @@ services:
     ports:
       - "8100:8000"
     environment:
-      # Where people reach this server. Sign-in redirects are built from it, so
-      # it has to be the address the browser actually uses.
+      # Where people reach this server -- the https address of your reverse
+      # proxy. Sign-in redirects are built from it, never from the incoming
+      # request, because behind a proxy that arrives as plain HTTP on an
+      # internal name.
       DOC_PUBLIC_URL: ${DOC_PUBLIC_URL:-http://localhost:8100}
+
+      # TLS is terminated by the proxy, which must pass X-Forwarded-For and
+      # X-Forwarded-Proto. Trusting those headers is what puts the visitor's own
+      # address in the audit log instead of the proxy's.
+      DOC_TRUST_PROXY: ${DOC_TRUST_PROXY:-1}
+      # ...and this is what keeps that trustworthy: forwarded headers are only
+      # believed on connections from your proxy. Left as "*" anyone who can
+      # reach the container directly can put any address in the log. See the
+      # reverse-proxy section of the README -- the proxy must also *overwrite*
+      # X-Forwarded-For rather than append to it.
+      DOC_PROXY_IPS: ${DOC_PROXY_IPS:-*}
 
       # --- signing in through the RMM ---------------------------------------
       # The RMM is the identity source: one sign-in, and its 2FA, IP rules and

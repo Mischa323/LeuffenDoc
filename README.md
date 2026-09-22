@@ -24,10 +24,59 @@ explicit environment variable always wins over one of those.
 | `DOC_M365_TENANT` / `DOC_M365_CLIENT_ID` / `DOC_M365_CLIENT_SECRET` | Microsoft 365 sign-in, the fallback for when the RMM is unreachable. |
 | `DOC_SESSION_SECRET` | Signs session cookies. Generated into the data volume on first boot if unset. |
 | `DOC_SECURE_COOKIES` | `1` by default. Only set to `0` for local HTTP development. |
+| `DOC_TRUST_PROXY` | `1` behind a reverse proxy, so the audit log records the visitor rather than the proxy. `0` if the container is reachable directly. |
+| `DOC_PROXY_IPS` | The address(es) your proxy connects from. Forwarded headers are only believed from there. |
 | `DOC_DEV_LOGIN` | `1` allows a password-free sign-in. Development only; the first account to sign in becomes the administrator. |
 
-TLS is expected to be terminated by the reverse proxy in front of it, as with
-the RMM.
+## Behind a reverse proxy
+
+TLS is terminated by the proxy, as with the RMM. The server needs three things
+from it:
+
+- **`X-Forwarded-Proto: https`** — without it the session cookie is set with
+  `Secure` over what the server believes is plain HTTP, and the browser drops
+  it, so signing in appears to do nothing.
+- **`X-Forwarded-For`** — the visitor's address, for the audit log.
+- **`Host`** — kept as the public hostname.
+
+Give it its **own hostname** (`doc.example.com`), not a sub-path of another
+site: pages reference their assets from the root.
+
+```nginx
+location / {
+    proxy_pass         http://127.0.0.1:8100;
+    proxy_set_header   Host              $host;
+    # $remote_addr, not $proxy_add_x_forwarded_for: see below.
+    proxy_set_header   X-Forwarded-For   $remote_addr;
+    proxy_set_header   X-Forwarded-Proto $scheme;
+}
+```
+
+Caddy: `reverse_proxy 127.0.0.1:8100 { header_up X-Forwarded-For {remote_host} }`
+(the rest it sets itself).
+
+### Two settings that decide whether the audit log can be trusted
+
+`X-Forwarded-For` is a header like any other — a visitor's browser can send one.
+Two things keep that from ending up in the log as their address:
+
+1. **`DOC_PROXY_IPS`** — the address your proxy connects from. Forwarded headers
+   are believed only on connections coming from there, so someone reaching the
+   container directly cannot dictate their own address. Left unset it means
+   "any", which is only safe while nothing but the proxy can reach the
+   container.
+2. **Overwriting, not appending.** nginx's usual `$proxy_add_x_forwarded_for`
+   *appends* to whatever the browser sent, and the oldest entry in that list —
+   the visitor's own claim — is the one that counts as the client. Setting
+   `$remote_addr` replaces the whole thing with the address nginx actually saw.
+
+`DOC_TRUST_PROXY=0` switches the headers off entirely; the log then records the
+proxy's address for everyone.
+
+**Check it worked:** sign in and open **Logboek**. It says which address the
+server sees you arriving from and over which scheme, and names anything that is
+off (a proxy whose headers aren't being passed on, a missing public address, a
+cookie that the browser will refuse).
 
 ## Where things live
 

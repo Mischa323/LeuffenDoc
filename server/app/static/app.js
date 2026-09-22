@@ -98,16 +98,56 @@
       </div>`).join("")}</div>`;
   }
 
+  // What the server makes of the connection. Behind a reverse proxy this is
+  // the fastest way to see whether it is passing its headers on -- and the
+  // audit log is only worth reading if the address in it is the visitor's.
+  function connectionView(d) {
+    const rows = [];
+    if (!d.public_url) {
+      rows.push(["warn", "Het openbare adres is niet ingesteld",
+        "Zet <code>DOC_PUBLIC_URL</code> op het https-adres waar mensen binnenkomen. Aanmeldingen springen anders terug naar een adres dat niet werkt."]);
+    }
+    if (d.forwarded_for && !d.trust_proxy) {
+      rows.push(["warn", "Er staat een proxy voor, maar die wordt niet vertrouwd",
+        `Het logboek schrijft nu <b class="mono">${esc(d.client_ip)}</b> op — de proxy zelf, niet de bezoeker. Zet <code>DOC_TRUST_PROXY=1</code>.`]);
+    }
+    if (d.trust_proxy && !d.forwarded_for) {
+      rows.push(["warn", "Vertrouwde proxy, maar geen doorgestuurd adres",
+        "<code>DOC_TRUST_PROXY</code> staat aan terwijl er geen <code>X-Forwarded-For</code> binnenkomt. Laat de proxy die meesturen, of zet de instelling uit."]);
+    }
+    if (d.trust_proxy && d.forwarded_hops > 1) {
+      rows.push(["warn", "De proxy plakt adressen aan elkaar",
+        `Er komen ${d.forwarded_hops} adressen binnen (<span class="mono">${esc(d.forwarded_for)}</span>). Dan bepaalt de bezoeker het oudste adres zelf, en dat is wat er wordt vastgelegd. Laat de proxy het adres <b>overschrijven</b> in plaats van aanvullen: <code>proxy_set_header X-Forwarded-For $remote_addr;</code>`]);
+    }
+    if (d.trust_proxy && d.proxy_ips === "*") {
+      rows.push(["warn", "Elk adres mag zich als proxy voordoen",
+        "Zet <code>DOC_PROXY_IPS</code> op het adres van je proxy. Anders kan iemand die de container rechtstreeks bereikt zelf bepalen welk adres in het logboek komt."]);
+    }
+    if (d.secure_cookies && d.scheme !== "https") {
+      rows.push(["warn", "Cookies vragen om https, maar het verkeer komt als http binnen",
+        "Laat de proxy <code>X-Forwarded-Proto: https</code> meesturen, anders bewaart de browser de aanmelding niet."]);
+    }
+    if (!rows.length) {
+      rows.push(["info", "De verbinding klopt",
+        `Je komt binnen vanaf <b class="mono">${esc(d.client_ip)}</b> via <b>${esc(d.scheme)}</b> op <b class="mono">${esc(d.host || "?")}</b>.`]);
+    }
+    return rows.map(([kind, title, text]) => `<div class="callout ${kind}" style="margin-bottom:14px">
+      <div class="ic">${kind === "warn" ? ICON.alert : ICON.info}</div>
+      <div><div class="ct">${title}</div><div class="cd">${text}</div></div></div>`).join("");
+  }
+
   async function auditView() {
     if (!state.me.is_admin) {
       return `<div class="callout info"><div class="ic">${ICON.info}</div><div>
         <div class="ct">Alleen voor beheerders</div>
         <div class="cd">Het logboek toont wat iedereen heeft bekeken en gewijzigd.</div></div></div>`;
     }
+    const diag = await api("/api/diagnostics").catch(() => null);
+    const head = diag ? connectionView(diag) : "";
     const entries = await api("/api/audit");
-    if (!entries.length) return `<div class="panel"><div class="empty"><div class="big">${ICON.history}</div>
+    if (!entries.length) return head + `<div class="panel"><div class="empty"><div class="big">${ICON.history}</div>
       <div>Nog niets vastgelegd</div></div></div>`;
-    return `<div class="panel"><table class="grid"><thead><tr>
+    return head + `<div class="panel"><table class="grid"><thead><tr>
         <th>Wanneer</th><th>Wie</th><th>Wat</th><th>Waarop</th><th>Vanaf</th></tr></thead><tbody>
       ${entries.map((e) => `<tr>
         <td>${new Date(e.at * 1000).toLocaleString("nl-NL")}</td>

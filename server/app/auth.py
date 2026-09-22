@@ -73,12 +73,29 @@ def cookie_kwargs() -> dict:
             "max_age": SESSION_DAYS * 86400, "path": "/"}
 
 
+def trust_proxy() -> bool:
+    return os.environ.get("DOC_TRUST_PROXY", "0") == "1"
+
+
 def client_ip(request: Request) -> str:
-    """The caller's address, honouring a reverse proxy's forwarded header."""
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
+    """The caller's address.
+
+    Deliberately *not* read from `X-Forwarded-For` here. That resolution happens
+    one layer down, in uvicorn, which only believes the header when the
+    connection itself comes from an address named in `DOC_PROXY_IPS` -- so a
+    caller reaching the container directly cannot write their own address into
+    the audit log. See `run.py`, and the reverse-proxy section of the README for
+    the matching proxy configuration.
+    """
     return request.client.host if request.client else "?"
+
+
+def forwarded_hops(request: Request) -> list[str]:
+    """The addresses in `X-Forwarded-For`, as sent. More than one means the
+    proxy is *appending* to a header the visitor's browser may have supplied,
+    and the oldest entry is then whatever they cared to claim."""
+    raw = request.headers.get("x-forwarded-for") or ""
+    return [h.strip() for h in raw.split(",") if h.strip()]
 
 
 def optional_user(request: Request) -> dict | None:
