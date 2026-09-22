@@ -1,0 +1,58 @@
+name: Auto-bump version
+
+# Increments the patch version (root VERSION file) on every push to main that
+# touches server/. That version is stamped onto the page's CSS/JS URLs, so it is
+# also what stops browsers serving yesterday's files after an upgrade. The bump
+# is committed back with the default token, which does not retrigger workflows.
+
+on:
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auto-version
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    # Skip the bot's own bump commits.
+    if: "!contains(github.event.head_commit.message, '[version bump]')"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine changed paths
+        id: changes
+        run: |
+          BEFORE="${{ github.event.before }}"
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            BEFORE="$(git rev-parse HEAD~1 2>/dev/null || echo HEAD)"
+          fi
+          FILES="$(git diff --name-only "$BEFORE" "${{ github.sha }}" || true)"
+          echo "server=$(echo "$FILES" | grep -qE '^(server/|VERSION$)' && echo yes || echo no)" >> "$GITHUB_OUTPUT"
+
+      - name: Bump version
+        if: steps.changes.outputs.server == 'yes'
+        run: |
+          cur="$(tr -d '[:space:]' < VERSION)"
+          IFS=. read -r MA MI PA <<< "$cur"
+          new="$MA.$MI.$((PA + 1))"
+          printf '%s\n' "$new" > VERSION
+          echo "LeuffenDoc: $cur -> $new"
+
+      - name: Commit bump
+        run: |
+          if git diff --quiet; then
+            echo "No version change needed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add VERSION
+          git commit -m "chore: auto version bump [version bump]"
+          git push origin HEAD:main

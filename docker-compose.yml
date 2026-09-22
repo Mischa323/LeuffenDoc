@@ -1,0 +1,37 @@
+services:
+  leuffendoc:
+    image: ${DOC_IMAGE:-ghcr.io/mischa323/leuffendoc:latest}
+    # To build from source instead, uncomment:
+    # build:
+    #   context: .
+    #   dockerfile: server/Dockerfile
+    ports:
+      - "8100:8000"
+    environment:
+      # Where people reach this server. Sign-in redirects are built from it, so
+      # it has to be the address the browser actually uses.
+      DOC_PUBLIC_URL: ${DOC_PUBLIC_URL:-http://localhost:8100}
+
+      # --- signing in through the RMM ---------------------------------------
+      # The RMM is the identity source: one sign-in, and its 2FA, IP rules and
+      # permissions apply here too. The API key is made in the RMM under
+      # Settings -> API & webhooks.
+      DOC_RMM_URL: ${DOC_RMM_URL:-}
+      DOC_RMM_API_KEY: ${DOC_RMM_API_KEY:-}
+
+      # --- signing in with Microsoft 365 (the fallback path) -----------------
+      DOC_M365_TENANT: ${DOC_M365_TENANT:-}
+      DOC_M365_CLIENT_ID: ${DOC_M365_CLIENT_ID:-}
+      DOC_M365_CLIENT_SECRET: ${DOC_M365_CLIENT_SECRET:-}
+
+      # Session cookies. Generated into /data on first boot if left unset.
+      DOC_SESSION_SECRET: ${DOC_SESSION_SECRET:-}
+      # TLS is terminated by your reverse proxy; set to 0 to serve plain HTTP
+      # directly (development only -- cookies then lose the Secure flag).
+      DOC_SECURE_COOKIES: ${DOC_SECURE_COOKIES:-1}
+    volumes:
+      - leuffendoc-data:/data
+    restart: unless-stopped
+
+volumes:
+  leuffendoc-data:

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="nl" data-theme="dark" data-density="1">
+<head>
+  <meta charset="utf-8" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LeuffenDoc</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand"><span class="logo" id="brand-logo"></span> Leuffen <span>Doc</span></div>
+      <nav class="crumbs"><a class="here" id="crumb">Klanten</a></nav>
+      <div class="spacer"></div>
+      <button class="icon-btn" id="theme-btn" title="Thema wisselen"></button>
+      <div class="userchip" id="userchip"><span class="avatar" id="avatar"></span>
+        <span class="who"><span id="user-name"></span><small id="user-email"></small></span></div>
+      <a class="icon-btn" id="logout-btn" href="/auth/logout" title="Afmelden"></a>
+    </header>
+
+    <main>
+      <section>
+        <div class="org-layout">
+          <aside class="sidebar">
+            <div class="side-label">Documentatie</div>
+            <div class="nav" id="nav"></div>
+          </aside>
+
+          <div class="content">
+            <div class="page-head">
+              <div><h1 id="page-title">Klanten</h1><p id="page-sub">De klanten die je mag zien</p></div>
+              <div style="display:flex;gap:8px" id="page-actions"></div>
+            </div>
+            <div id="view"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="/icons.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

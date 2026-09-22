@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local data: the database, uploaded files and the vault's master key all live
+# here. None of it belongs in the repo.
+data/
+*.db
+*.db-wal
+*.db-shm
+*.key
+
+.env
+.DS_Store
