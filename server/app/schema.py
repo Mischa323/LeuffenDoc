@@ -44,6 +44,7 @@ COMPUTER = {
     "icon": "desktop",
     "family": "configuratie",
     "sub": "Werkplekken, laptops, servers en NAS-en",
+    "backref": "Wat hiernaar verwijst",
     # What a list shows at a glance.
     "columns": ["role", "status", "os", "installed_at", "eol"],
     "groups": [
@@ -84,6 +85,7 @@ NETWORK = {
     "icon": "network",
     "family": "configuratie",
     "sub": "Switches, firewalls, routers en access points",
+    "backref": "Wat hierop aangesloten is",
     # What a list shows at a glance.
     "columns": ["role", "status", "mgmt_ip", "eol"],
     "groups": [
@@ -119,6 +121,7 @@ PRINTER = {
     "icon": "copy",
     "family": "configuratie",
     "sub": "Printers en multifunctionals",
+    "backref": "Wat hiernaar verwijst",
     # What a list shows at a glance.
     "columns": ["status", "placement", "eol"],
     "groups": [
@@ -155,6 +158,7 @@ INTERNET = {
     "icon": "globe",
     "family": "onderdeel",
     "sub": "Lijnen, providers, vaste adressen en contracten",
+    "backref": "Wat hiernaar verwijst",
     # What a list shows at a glance.
     "columns": ["provider", "line_type", "speed_down", "contract_until"],
     "groups": [
@@ -190,6 +194,7 @@ LOCATION = {
     "icon": "building",
     "family": "onderdeel",
     "sub": "Vestigingen en panden van deze klant",
+    "backref": "Wat hier staat",
     # What a list shows at a glance.
     "columns": ["city", "phone"],
     "groups": [
@@ -213,6 +218,7 @@ CONTACT = {
     "icon": "user",
     "family": "onderdeel",
     "sub": "Wie je bij deze klant belt",
+    "backref": "Waar deze persoon bij hoort",
     # What a list shows at a glance.
     "columns": ["job", "email", "phone"],
     "groups": [
@@ -263,6 +269,12 @@ def catalogue() -> dict:
             for name, spec in KINDS.items()}
 
 
+def ref_fields() -> dict:
+    """Per kind, the fields that hold a reference to another item."""
+    return {name: [f for f in fields_of(name).values() if f["type"] == "ref"]
+            for name in KINDS}
+
+
 def clean(name: str, values: dict) -> dict:
     """Keep what the kind actually has, drop the rest.
 
@@ -296,6 +308,22 @@ def clean(name: str, values: dict) -> dict:
             text = str(value).strip()
             if text:
                 out[key] = text
+    return out
+
+
+def clean_form(name: str, values: dict) -> dict:
+    """What a form sent, ready to store -- emptying a field included.
+
+    :func:`clean` drops empty values, which is right when reading a payload but
+    wrong for a form: a field the person deliberately cleared arrives empty and
+    has to stay empty, or the old value silently comes back.
+    """
+    out = clean(name, values)
+    known = fields_of(name)
+    for key, value in (values or {}).items():
+        spec = known.get(key)
+        if spec and not spec.get("rmm") and key not in out:
+            out[key] = ""
     return out
 
 

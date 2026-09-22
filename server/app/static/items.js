@@ -57,7 +57,7 @@ window.DocItems = function (ctx) {
     }
     if (field.type === "ref") {
       const other = (all || []).find((i) => i.id === raw);
-      return other ? other.name : "—";
+      return other ? other.name : "(verwijderd)";
     }
     return String(raw);
   }
@@ -340,6 +340,7 @@ window.DocItems = function (ctx) {
                <button class="btn" id="edit-save">${ICON.save} Opslaan</button></div>`
                    : readBlocks()
                      + `<div id="adapters"></div><div id="ports"></div>`
+                     + `<div id="referred"></div>`
                      + `<div id="related"></div><div id="history"></div>`);
       wireHead();
       const goneBtn = host.querySelector("#gone-archive");
@@ -355,6 +356,7 @@ window.DocItems = function (ctx) {
         });
         await drawAdapters();
         await drawPorts();
+        drawReferredBy();
         await drawRelated();
         await drawHistory();
       }
@@ -585,6 +587,35 @@ window.DocItems = function (ctx) {
             draw();
           } catch (e) { toast(e.message); }
         };
+      });
+    }
+
+    /* The other half of a reference. A computer names its location; standing
+       on the location, what you want is the list of what is there. Grouped by
+       the field that points, so it reads as sentences rather than as a dump. */
+    function drawReferredBy() {
+      const slot = host.querySelector("#referred");
+      if (!slot) return;
+      const rows = item.referred_by || [];
+      if (!rows.length) { slot.innerHTML = ""; return; }
+      const groups = {};
+      for (const r of rows) (groups[r.field_label] ||= []).push(r);
+      slot.innerHTML = `<div class="panel">
+          <div class="panel-head"><h2>${esc(spec.backref || "Wat hiernaar verwijst")}</h2>
+            <span class="sub">${rows.length === 1 ? "1 item" : `${rows.length} items`}</span></div>
+          ${Object.entries(groups).map(([label, list]) => `
+            <div class="backref-group">
+              <div class="backref-label">${esc(label)}</div>
+              <div>${list.map((r) => `<div class="rel-row" data-goto="${esc(r.id)}">
+                <span class="rel-ic">${ICON[KINDS[r.kind] ? KINDS[r.kind].icon : "link"]}</span>
+                <span class="rel-name">${esc(r.name)}</span>
+                ${r.archived ? '<span class="tag">afgevoerd</span>' : ""}
+                <small>${esc(KINDS[r.kind] ? KINDS[r.kind].label : r.kind)}</small>
+              </div>`).join("")}</div>
+            </div>`).join("")}
+        </div>`;
+      slot.querySelectorAll("[data-goto]").forEach((row) => {
+        row.onclick = () => go(`#/klant/${org.id}/item/${row.dataset.goto}`);
       });
     }
 

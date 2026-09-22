@@ -369,12 +369,33 @@ def _labeller(kind: str):
     return lambda key: schema.label_of(kind, key)
 
 
+def _referred_by(item: dict) -> list:
+    """Everything in this customer that points at this item.
+
+    A reference is written on one side -- a computer names its location -- but
+    it is worth reading from both: standing on a location, what you want is the
+    list of what is there. Nobody should have to write that down twice.
+    """
+    refs = schema.ref_fields()
+    out = []
+    for other in database.list_items(item["org_id"], include_archived=True):
+        if other["id"] == item["id"]:
+            continue
+        for field in refs.get(other["kind"], []):
+            if other["fields"].get(field["key"]) == item["id"]:
+                out.append({"id": other["id"], "kind": other["kind"],
+                            "name": other["name"], "archived": other["archived"],
+                            "field": field["key"], "field_label": field["label"]})
+    return out
+
+
 def _decorate(item: dict) -> dict:
     """An item as the interface wants it: its own fields, what the RMM knows,
     what it is related to, its network adapters, and -- for a switch -- the
     patch list of its ports."""
     item = dict(item)
     item["relations"] = database.relations_of(item["id"])
+    item["referred_by"] = _referred_by(item)
     if item["kind"] in schema.ADAPTER_KINDS:
         item["adapters"] = database.list_adapters(item["id"])
     if has_ports(item):
@@ -441,7 +462,7 @@ async def edit_item(item_id: str, request: Request,
     fields = body.get("fields")
     updated = database.update_item(
         item_id, name=name,
-        fields=schema.clean(item["kind"], fields) if fields is not None else None,
+        fields=schema.clean_form(item["kind"], fields) if fields is not None else None,
         by=user["email"], label=_labeller(item["kind"]))
     database.audit("item.update", user_email=user["email"], org_id=item["org_id"],
                    target=updated["name"], ip=auth.client_ip(request))
@@ -471,6 +492,14 @@ def remove_item(item_id: str, request: Request,
     archiving is what everyone else has, and it is what you want anyway."""
     item, _ = _item_for(user, item_id)
     auth.require_admin(user)
+    pointing = _referred_by(item)
+    if pointing:
+        names = ", ".join(sorted({p["name"] for p in pointing})[:3])
+        more = f" en nog {len(pointing) - 3}" if len(pointing) > 3 else ""
+        raise HTTPException(
+            status_code=409,
+            detail=f"Hier wordt nog naar verwezen door {names}{more}. "
+                   "Haal die verwijzing weg, of kies Afvoeren in plaats van verwijderen.")
     database.delete_item(item_id)
     database.audit("item.delete", user_email=user["email"], org_id=item["org_id"],
                    target=item["name"], ip=auth.client_ip(request))
@@ -517,13 +546,8 @@ def revert_revision(revision_id: int, request: Request,
             name = change["from"] or None
         else:
             fields[change["key"]] = change["from"] or ""
-    # A field that stood empty before the change has to be emptied again, and
-    # clean() drops empty values -- so they are put back explicitly.
-    restored = schema.clean(item["kind"], {k: v for k, v in fields.items() if v})
-    for key, value in fields.items():
-        if not value:
-            restored[key] = ""
-    updated = database.update_item(item["id"], name=name, fields=restored,
+    updated = database.update_item(item["id"], name=name,
+                                   fields=schema.clean_form(item["kind"], fields),
                                    by=user["email"], label=_labeller(item["kind"]))
     database.audit("item.revert", user_email=user["email"], org_id=item["org_id"],
                    target=item["name"], detail=f"wijziging {revision_id}",
