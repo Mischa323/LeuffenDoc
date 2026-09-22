@@ -3,10 +3,11 @@
 Every HTTP endpoint lives here (as in the RMM server, so the two read alike).
 The page itself is plain HTML/CSS/JS served from `static/` -- no build step.
 
-This is the foundation: the database, sessions, customers and the shell of the
-interface. Signing in through the RMM and with Microsoft 365, the documents
-themselves, the customisable document types and the password vault are built on
-top of it, each in its own step.
+Built up in steps: the database, sessions and customers; signing in through the
+RMM and with Microsoft 365; and now what is actually documented -- configurations
+and the customer's own parts, with their history and what they are related to.
+Types people define themselves and the password vault come on top of the same
+foundation.
 """
 from __future__ import annotations
 
@@ -16,11 +17,11 @@ import os
 import secrets
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, database, m365, rmm
+from . import auth, database, m365, rmm, schema
 
 log = logging.getLogger("leuffendoc")
 
@@ -330,6 +331,229 @@ async def rmm_sync_now(request: Request, user: dict = Depends(auth.current_user)
     result = await asyncio.to_thread(rmm.sync)
     database.audit("rmm.sync.manual", user_email=user["email"], ip=auth.client_ip(request))
     return result
+
+
+# --------------------------------------------------------------------------- #
+# What is documented: configurations and the customer's own parts
+#
+# One set of endpoints for every kind, because the difference between a switch
+# and an internet connection is a list of fields (see schema.py) and not a
+# different way of storing, reading or recording it. The interface builds its
+# forms from the same catalogue, so a field added there needs nothing here.
+# --------------------------------------------------------------------------- #
+def _may_see(user: dict, org_id: str) -> dict:
+    """The customer, if this person may see it.
+
+    An administrator sees every customer; everyone else sees the ones the RMM
+    gave them. A customer they may not see is reported as missing rather than
+    forbidden -- "you may not see X" already tells them X exists.
+    """
+    org = database.get_org(org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Deze klant bestaat niet")
+    if user.get("is_admin"):
+        return org
+    if not any(o["id"] == org_id for o in database.user_orgs(user["email"])):
+        raise HTTPException(status_code=404, detail="Deze klant bestaat niet")
+    return org
+
+
+def _item_for(user: dict, item_id: str) -> tuple[dict, dict]:
+    item = database.get_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Dit item bestaat niet")
+    return item, _may_see(user, item["org_id"])
+
+
+def _labeller(kind: str):
+    return lambda key: schema.label_of(kind, key)
+
+
+def _decorate(item: dict) -> dict:
+    """An item as the interface wants it: its own fields, what the RMM knows,
+    and what it is related to."""
+    item = dict(item)
+    item["relations"] = database.relations_of(item["id"])
+    return item
+
+
+@app.get("/api/kinds")
+def kinds(user: dict = Depends(auth.current_user)):
+    """Everything that can be documented, and the fields each kind has."""
+    return schema.catalogue()
+
+
+@app.get("/api/orgs/{org_id}/items")
+def org_items(org_id: str, kind: str | None = None, archived: bool = False,
+              user: dict = Depends(auth.current_user)):
+    _may_see(user, org_id)
+    if kind and not schema.kind(kind):
+        raise HTTPException(status_code=400, detail=f"Onbekend soort: {kind}")
+    return database.list_items(org_id, kind, include_archived=archived)
+
+
+@app.get("/api/orgs/{org_id}/summary")
+def org_summary(org_id: str, user: dict = Depends(auth.current_user)):
+    """How much of each kind this customer has -- what the overview shows."""
+    org = _may_see(user, org_id)
+    return {"org": org, "counts": database.count_items(org_id)}
+
+
+@app.post("/api/orgs/{org_id}/items")
+async def create_org_item(org_id: str, request: Request,
+                          user: dict = Depends(auth.current_user)):
+    _may_see(user, org_id)
+    body = await request.json()
+    kind = (body.get("kind") or "").strip()
+    if not schema.kind(kind):
+        raise HTTPException(status_code=400, detail=f"Onbekend soort: {kind or '(leeg)'}")
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Een naam is verplicht")
+    item = database.create_item(org_id, kind, name,
+                                schema.clean(kind, body.get("fields") or {}),
+                                by=user["email"], label=_labeller(kind))
+    database.audit("item.create", user_email=user["email"], org_id=org_id,
+                   target=name, detail=schema.KINDS[kind]["label"],
+                   ip=auth.client_ip(request))
+    return _decorate(item)
+
+
+@app.get("/api/items/{item_id}")
+def read_item(item_id: str, user: dict = Depends(auth.current_user)):
+    item, _ = _item_for(user, item_id)
+    return _decorate(item)
+
+
+@app.patch("/api/items/{item_id}")
+async def edit_item(item_id: str, request: Request,
+                    user: dict = Depends(auth.current_user)):
+    item, _ = _item_for(user, item_id)
+    body = await request.json()
+    name = body.get("name")
+    if name is not None and not str(name).strip():
+        raise HTTPException(status_code=400, detail="Een naam is verplicht")
+    fields = body.get("fields")
+    updated = database.update_item(
+        item_id, name=name,
+        fields=schema.clean(item["kind"], fields) if fields is not None else None,
+        by=user["email"], label=_labeller(item["kind"]))
+    database.audit("item.update", user_email=user["email"], org_id=item["org_id"],
+                   target=updated["name"], ip=auth.client_ip(request))
+    return _decorate(updated)
+
+
+@app.post("/api/items/{item_id}/archive")
+async def archive_item(item_id: str, request: Request,
+                       user: dict = Depends(auth.current_user)):
+    """Out of the way, not gone. Documentation hangs off these things, and a
+    machine that left the building is often exactly what you need to look up a
+    year later."""
+    item, _ = _item_for(user, item_id)
+    body = await request.json() if await request.body() else {}
+    archived = bool(body.get("archived", True))
+    updated = database.set_archived(item_id, archived, by=user["email"])
+    database.audit("item.archive" if archived else "item.restore",
+                   user_email=user["email"], org_id=item["org_id"],
+                   target=item["name"], ip=auth.client_ip(request))
+    return _decorate(updated)
+
+
+@app.delete("/api/items/{item_id}")
+def remove_item(item_id: str, request: Request,
+                user: dict = Depends(auth.current_user)):
+    """Really gone, with its history and its links. Administrators only --
+    archiving is what everyone else has, and it is what you want anyway."""
+    item, _ = _item_for(user, item_id)
+    auth.require_admin(user)
+    database.delete_item(item_id)
+    database.audit("item.delete", user_email=user["email"], org_id=item["org_id"],
+                   target=item["name"], ip=auth.client_ip(request))
+    return {"status": "ok"}
+
+
+# --------------------------------------------------------------------------- #
+# History
+# --------------------------------------------------------------------------- #
+@app.get("/api/items/{item_id}/revisions")
+def item_revisions(item_id: str, user: dict = Depends(auth.current_user)):
+    _item_for(user, item_id)
+    return database.list_revisions(item_id)
+
+
+@app.post("/api/revisions/{revision_id}/revert")
+def revert_revision(revision_id: int, request: Request,
+                    user: dict = Depends(auth.current_user)):
+    """Undo one recorded change, putting back what stood there before it.
+
+    Undoing is itself a change, so it is recorded like any other -- the history
+    shows what happened, never a rewritten version of it.
+    """
+    revision = database.get_revision(revision_id)
+    if not revision:
+        raise HTTPException(status_code=404, detail="Deze wijziging bestaat niet")
+    item, _ = _item_for(user, revision["item_id"])
+    if not revision["changes"]:
+        raise HTTPException(status_code=400,
+                            detail="Bij deze regel staan geen veldwijzigingen om terug te draaien")
+    name = None
+    fields = {}
+    for change in revision["changes"]:
+        if change["key"] == "naam":
+            name = change["from"] or None
+        else:
+            fields[change["key"]] = change["from"] or ""
+    # A field that stood empty before the change has to be emptied again, and
+    # clean() drops empty values -- so they are put back explicitly.
+    restored = schema.clean(item["kind"], {k: v for k, v in fields.items() if v})
+    for key, value in fields.items():
+        if not value:
+            restored[key] = ""
+    updated = database.update_item(item["id"], name=name, fields=restored,
+                                   by=user["email"], label=_labeller(item["kind"]))
+    database.audit("item.revert", user_email=user["email"], org_id=item["org_id"],
+                   target=item["name"], detail=f"wijziging {revision_id}",
+                   ip=auth.client_ip(request))
+    return _decorate(updated)
+
+
+# --------------------------------------------------------------------------- #
+# Relations
+# --------------------------------------------------------------------------- #
+@app.post("/api/items/{item_id}/relations")
+async def add_relation(item_id: str, request: Request,
+                       user: dict = Depends(auth.current_user)):
+    item, _ = _item_for(user, item_id)
+    body = await request.json()
+    other_id = (body.get("item_id") or "").strip()
+    other, _ = _item_for(user, other_id)
+    # Both sides have to belong to the same customer: a link across customers
+    # would carry one customer's information into another's page.
+    if other["org_id"] != item["org_id"]:
+        raise HTTPException(status_code=400,
+                            detail="Koppelen kan alleen binnen dezelfde klant")
+    try:
+        relation_id = database.relate(item_id, other_id,
+                                      (body.get("label") or "").strip() or None,
+                                      by=user["email"])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    database.audit("item.relate", user_email=user["email"], org_id=item["org_id"],
+                   target=item["name"], detail=other["name"], ip=auth.client_ip(request))
+    return {"relation_id": relation_id, "relations": database.relations_of(item_id)}
+
+
+@app.delete("/api/relations/{relation_id}")
+def drop_relation(relation_id: str, request: Request,
+                  user: dict = Depends(auth.current_user)):
+    relation = database.get_relation(relation_id)
+    if not relation:
+        raise HTTPException(status_code=404, detail="Deze koppeling bestaat niet")
+    item, _ = _item_for(user, relation["a_id"])
+    database.unrelate(relation_id)
+    database.audit("item.unrelate", user_email=user["email"], org_id=item["org_id"],
+                   target=item["name"], ip=auth.client_ip(request))
+    return {"status": "ok"}
 
 
 # --------------------------------------------------------------------------- #
