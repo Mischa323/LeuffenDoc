@@ -1,8 +1,13 @@
 /* LeuffenDoc — the shell.
 
-   This is the foundation: who is signed in, which customers they may see, and
-   the frame the rest hangs in. Documents, custom document types and the vault
-   each arrive as their own section in the sidebar. */
+   Two levels, because documentation only means anything in the context of a
+   customer: the start is the customer list, and a customer's documents, its
+   passwords and the rest only appear once you are inside one. What stays at the
+   top is what genuinely spans customers — the document types everyone shares,
+   and the audit log.
+
+   Where you are lives in the URL (`#/klant/<id>/documenten`), so the back
+   button, a refresh and a copied link all land where you expect. */
 (function () {
   "use strict";
 
@@ -10,23 +15,29 @@
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-  const state = { me: null, orgs: [], tab: "orgs" };
+  const state = { me: null, orgs: [], org: null, tab: "klanten" };
 
-  // Sections. The ones that aren't built yet say so plainly rather than
-  // pretending to be empty.
-  const TABS = [
-    { id: "orgs", label: "Klanten", icon: "building", title: "Klanten",
-      sub: "De klanten die je mag zien" },
-    { id: "docs", label: "Documenten", icon: "file", title: "Documenten",
-      sub: "Pagina's per klant", soon: "Documenten, mappen en zoeken komen in de volgende stap." },
+  // Top level: only what is not tied to a single customer.
+  const GLOBAL = [
+    { id: "klanten", label: "Klanten", icon: "building", title: "Klanten",
+      sub: "Kies een klant om zijn documentatie te openen" },
     { id: "types", label: "Documenttypes", icon: "layers", title: "Documenttypes",
-      sub: "Zelf samengestelde types met eigen velden",
-      soon: "Hiermee maak je straks je eigen documentatiepunten: kies de velden, en elke klant krijgt dezelfde structuur." },
-    { id: "vault", label: "Wachtwoorden", icon: "key", title: "Wachtwoorden",
-      sub: "Versleutelde kluis per klant",
-      soon: "De kluis wordt gebouwd nadat de documentatie staat. Opslag wordt versleuteld met een sleutel per klant, en elk tonen of kopiëren komt in het logboek." },
-    { id: "audit", label: "Logboek", icon: "history", title: "Logboek",
-      sub: "Wie heeft wat bekeken en gewijzigd" },
+      sub: "Zelf samengestelde types, voor al je klanten", admin: true,
+      soon: "Hiermee maak je je eigen documentatiepunten: kies de velden die erin horen — tekst, keuze, datum, wachtwoord, een link naar een apparaat — en elke klant krijgt dezelfde structuur." },
+    { id: "logboek", label: "Logboek", icon: "history", title: "Logboek",
+      sub: "Wie heeft wat bekeken en gewijzigd", admin: true },
+  ];
+
+  // Inside a customer.
+  const ORG = [
+    { id: "overzicht", label: "Overzicht", icon: "grid", title: "Overzicht",
+      sub: "Wat er van deze klant bekend is" },
+    { id: "documenten", label: "Documenten", icon: "file", title: "Documenten",
+      sub: "Pagina's, mappen en bijlagen van deze klant",
+      soon: "Documenten met een editor, mappen, labels, versies om op terug te vallen en zoeken over alles heen." },
+    { id: "wachtwoorden", label: "Wachtwoorden", icon: "key", title: "Wachtwoorden",
+      sub: "Versleutelde kluis van deze klant",
+      soon: "Wachtwoorden worden versleuteld opgeslagen met een sleutel per klant. Tonen en kopiëren is een apart recht, en komt altijd in het logboek." },
   ];
 
   async function api(path, opts) {
@@ -60,35 +71,78 @@
       applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
   }
 
-  // ---- sidebar ----
-  function renderNav() {
-    $("nav").innerHTML = TABS.map((t) =>
-      `<button data-tab="${t.id}"${t.id === state.tab ? ' class="active"' : ""}>
-         ${ICON[t.icon]} ${t.label}${t.id === "orgs" ? `<span class="count">${state.orgs.length}</span>` : ""}
-       </button>`).join("");
-    $("nav").querySelectorAll("button").forEach((b) => {
-      b.onclick = () => { state.tab = b.dataset.tab; render(); };
-    });
+  // ---- where we are ----
+  function tabsHere() {
+    return state.org ? ORG : GLOBAL.filter((t) => !t.admin || state.me.is_admin);
   }
 
-  // ---- views ----
-  function orgMark(name) {
+  function go(hash) {
+    if (location.hash === hash) route();      // same place: re-render anyway
+    else location.hash = hash;
+  }
+
+  function route() {
+    const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+    if (parts[0] === "klant" && parts[1]) {
+      state.org = state.orgs.find((o) => o.id === parts[1]) || null;
+      state.tab = state.org && ORG.some((t) => t.id === parts[2]) ? parts[2] : "overzicht";
+    } else {
+      state.org = null;
+      const tabs = tabsHere();
+      state.tab = tabs.some((t) => t.id === parts[0]) ? parts[0] : "klanten";
+    }
+    render();
+  }
+
+  // ---- pieces ----
+  function orgMark(name, big) {
     const initials = name.trim().split(/\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase();
     // A stable colour per customer, so the same one always looks the same.
     let h = 0;
     for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
-    return `<span class="oc-mark" style="background:hsl(${h} 55% 45%)">${esc(initials)}</span>`;
+    return `<span class="oc-mark" style="background:hsl(${h} 55% 45%)${big ? ";width:46px;height:46px;font-size:17px" : ""}">${esc(initials)}</span>`;
   }
 
+  function renderNav() {
+    $("nav-label").textContent = state.org ? "Deze klant" : "Overzicht";
+    $("nav").innerHTML = tabsHere().map((t) =>
+      `<button data-tab="${t.id}"${t.id === state.tab ? ' class="active"' : ""}>
+         ${ICON[t.icon]} ${t.label}${t.id === "klanten" ? `<span class="count">${state.orgs.length}</span>` : ""}
+       </button>`).join("")
+      + (state.org ? `<button data-back="1" style="margin-top:10px">
+           <span class="back-ico">${ICON.chevR}</span> Alle klanten</button>` : "");
+    $("nav").querySelectorAll("button").forEach((b) => {
+      b.onclick = () => go(b.dataset.back ? "#/klanten"
+                                          : (state.org ? `#/klant/${state.org.id}/${b.dataset.tab}`
+                                                       : `#/${b.dataset.tab}`));
+    });
+  }
+
+  function crumbs() {
+    $("crumb-home").className = state.org ? "" : "here";
+    $("crumb-home").onclick = () => go("#/klanten");
+    $("crumb-sep").classList.toggle("hidden", !state.org);
+    $("crumb-org").classList.toggle("hidden", !state.org);
+    if (state.org) $("crumb-org").textContent = state.org.name;
+  }
+
+  // ---- views ----
   function orgsView() {
+    const add = state.me.is_admin ? `
+      <div class="panel" id="new-org" style="padding:16px;margin-bottom:16px;display:none">
+        <div style="display:flex;gap:8px;align-items:center">
+          <input class="inp" id="new-org-name" placeholder="Naam van de klant" style="flex:1" />
+          <button class="btn sm" id="new-org-save">Aanmaken</button>
+          <button class="btn ghost sm" id="new-org-cancel">Annuleren</button>
+        </div></div>` : "";
     if (!state.orgs.length) {
-      return `<div class="panel"><div class="empty"><div class="big">${ICON.building}</div>
+      return add + `<div class="panel"><div class="empty"><div class="big">${ICON.building}</div>
         <div>Nog geen klanten</div>
         <div style="font-size:12.5px;margin-top:6px">${state.me.is_admin
-          ? "Voeg er een toe, of koppel de RMM zodat de klanten daar vandaan komen."
+          ? "Maak er een aan — documentatie en wachtwoorden horen altijd bij een klant."
           : "Vraag een beheerder om je toegang te geven."}</div></div></div>`;
     }
-    return `<div class="cards">${state.orgs.map((o) => `
+    return add + `<div class="cards">${state.orgs.map((o) => `
       <div class="orgcard" data-org="${esc(o.id)}">
         <div class="oc-head">${orgMark(o.name)}
           <div><h3>${esc(o.name)}</h3>
@@ -96,6 +150,31 @@
           <span class="oc-arrow">${ICON.chevR}</span>
         </div>
       </div>`).join("")}</div>`;
+  }
+
+  function overviewView() {
+    const o = state.org;
+    const initials = o.name.trim().split(/\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase();
+    let h = 0;
+    for (const ch of o.name) h = (h * 31 + ch.charCodeAt(0)) % 360;
+    return `<div class="panel" style="padding:20px;margin-bottom:16px">
+        <div class="org-head">
+          <span class="mark" style="background:hsl(${h} 55% 45%)">${esc(initials)}</span>
+          <div><h3>${esc(o.name)}</h3>
+            <small>${o.rmm_org_id
+              ? `gekoppeld aan de RMM (<span class="mono">${esc(o.rmm_org_id)}</span>)`
+              : "nog niet gekoppeld aan een organisatie in de RMM"}</small></div>
+        </div></div>
+      <div class="cards">
+        ${[["documenten", "file", "Documenten", "Pagina's over deze klant"],
+           ["wachtwoorden", "key", "Wachtwoorden", "De kluis van deze klant"]]
+          .map(([id, icon, title, sub]) => `
+          <div class="orgcard" data-tab="${id}">
+            <div class="oc-head"><span class="oc-mark" style="background:var(--surface-3);color:var(--text-dim)">${ICON[icon]}</span>
+              <div><h3>${title}</h3><small>${sub}</small></div>
+              <span class="oc-arrow">${ICON.chevR}</span></div>
+          </div>`).join("")}
+      </div>`;
   }
 
   // What the server makes of the connection. Behind a reverse proxy this is
@@ -117,15 +196,11 @@
     }
     if (d.trust_proxy && d.forwarded_hops > 1) {
       rows.push(["warn", "De proxy plakt adressen aan elkaar",
-        `Er komen ${d.forwarded_hops} adressen binnen (<span class="mono">${esc(d.forwarded_for)}</span>). Dan bepaalt de bezoeker het oudste adres zelf, en dat is wat er wordt vastgelegd. Laat de proxy het adres <b>overschrijven</b> in plaats van aanvullen: <code>proxy_set_header X-Forwarded-For $remote_addr;</code>`]);
+        `Er komen ${d.forwarded_hops} adressen binnen (<span class="mono">${esc(d.forwarded_for)}</span>). Laat de proxy het adres <b>overschrijven</b> in plaats van aanvullen: <code>proxy_set_header X-Forwarded-For $remote_addr;</code>`]);
     }
     if (d.trust_proxy && d.proxy_ips === "*") {
       rows.push(["warn", "Elk adres mag zich als proxy voordoen",
         "Zet <code>DOC_PROXY_IPS</code> op het adres van je proxy. Anders kan iemand die de container rechtstreeks bereikt zelf bepalen welk adres in het logboek komt."]);
-    }
-    if (d.secure_cookies && d.scheme !== "https") {
-      rows.push(["warn", "Cookies vragen om https, maar het verkeer komt als http binnen",
-        "Laat de proxy <code>X-Forwarded-Proto: https</code> meesturen, anders bewaart de browser de aanmelding niet."]);
     }
     if (!rows.length) {
       rows.push(["info", "De verbinding klopt",
@@ -137,11 +212,6 @@
   }
 
   async function auditView() {
-    if (!state.me.is_admin) {
-      return `<div class="callout info"><div class="ic">${ICON.info}</div><div>
-        <div class="ct">Alleen voor beheerders</div>
-        <div class="cd">Het logboek toont wat iedereen heeft bekeken en gewijzigd.</div></div></div>`;
-    }
     const diag = await api("/api/diagnostics").catch(() => null);
     const head = diag ? connectionView(diag) : "";
     const entries = await api("/api/audit");
@@ -157,37 +227,66 @@
   }
 
   function soonView(tab) {
+    const who = state.org ? ` van ${esc(state.org.name)}` : "";
     return `<div class="panel"><div class="empty"><div class="big">${ICON[tab.icon]}</div>
-      <div>${esc(tab.title)} — nog niet gebouwd</div>
-      <div style="font-size:12.5px;margin-top:8px;max-width:520px;margin-inline:auto;line-height:1.6">
+      <div>${esc(tab.title)}${who} — nog niet gebouwd</div>
+      <div style="font-size:12.5px;margin-top:8px;max-width:540px;margin-inline:auto;line-height:1.6">
         ${esc(tab.soon)}</div></div></div>`;
   }
 
+  // ---- render ----
   async function render() {
-    const tab = TABS.find((t) => t.id === state.tab) || TABS[0];
-    $("page-title").textContent = tab.title;
+    const tab = tabsHere().find((t) => t.id === state.tab) || tabsHere()[0];
+    state.tab = tab.id;
+    $("page-title").textContent = state.org && tab.id === "overzicht" ? state.org.name : tab.title;
     $("page-sub").textContent = tab.sub;
-    $("crumb").textContent = tab.label;
+    crumbs();
     renderNav();
 
-    $("page-actions").innerHTML = (tab.id === "orgs" && state.me.is_admin)
+    $("page-actions").innerHTML = (!state.org && tab.id === "klanten" && state.me.is_admin)
       ? `<button class="btn sm" id="add-org">${ICON.plus} Klant toevoegen</button>` : "";
 
-    if (tab.id === "orgs") $("view").innerHTML = orgsView();
-    else if (tab.id === "audit") $("view").innerHTML = await auditView();
-    else $("view").innerHTML = soonView(tab);
+    if (state.org) {
+      $("view").innerHTML = tab.id === "overzicht" ? overviewView() : soonView(tab);
+      $("view").querySelectorAll("[data-tab]").forEach((el) => {
+        el.onclick = () => go(`#/klant/${state.org.id}/${el.dataset.tab}`);
+      });
+      return;
+    }
+    if (tab.id === "logboek") { $("view").innerHTML = await auditView(); return; }
+    if (tab.id === "types") { $("view").innerHTML = soonView(tab); return; }
 
+    $("view").innerHTML = orgsView();
+    $("view").querySelectorAll(".orgcard[data-org]").forEach((card) => {
+      card.onclick = () => go(`#/klant/${card.dataset.org}`);
+    });
+    wireNewOrg();
+  }
+
+  function wireNewOrg() {
+    const panel = $("new-org");
+    if (!panel) return;
+    const open = (yes) => {
+      panel.style.display = yes ? "block" : "none";
+      if (yes) $("new-org-name").focus();
+    };
     const add = $("add-org");
-    if (add) add.onclick = async () => {
-      const name = prompt("Naam van de klant");
-      if (!name) return;
+    if (add) add.onclick = () => open(panel.style.display === "none");
+    $("new-org-cancel").onclick = () => open(false);
+    const save = async () => {
+      const name = $("new-org-name").value.trim();
+      if (!name) { $("new-org-name").focus(); return; }
       try {
-        await api("/api/orgs", { method: "POST", headers: { "Content-Type": "application/json" },
-                                 body: JSON.stringify({ name }) });
+        const org = await api("/api/orgs", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
         state.orgs = await api("/api/orgs");
-        render();
+        go(`#/klant/${org.id}`);        // straight into the customer just created
       } catch (e) { alert(e.message); }
     };
+    $("new-org-save").onclick = save;
+    $("new-org-name").addEventListener("keydown", (e) => { if (e.key === "Enter") save(); });
   }
 
   // ---- boot ----
@@ -202,6 +301,7 @@
     $("avatar").textContent = name.slice(0, 2).toUpperCase();
     $("avatar").style.background = "var(--accent)";
     $("logout-btn").innerHTML = ICON.logout;
-    render();
+    window.addEventListener("hashchange", route);
+    route();
   })();
 })();

@@ -9,12 +9,27 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
+  <style>
+    /* A few rules of our own. styles.css is a copy of the dashboard's and is
+       kept identical, so anything specific to this app lives here.
+       The shared sheet sizes every inline icon to 16px, which is right in a
+       button and far too small for the icon of an empty page or a customer's
+       header — hence the explicit sizes. */
+    .empty .big svg { width: 40px; height: 40px; }
+    .org-head { display: flex; align-items: center; gap: 14px; }
+    .org-head .mark { width: 46px; height: 46px; border-radius: var(--r-md); display: grid;
+                      place-items: center; font-weight: 700; font-size: 16px; color: #fff; flex: none; }
+    .org-head h3 { margin: 0; font-size: 17px; font-weight: 650; }
+    .org-head small { color: var(--text-faint); font-size: 12.5px; }
+    .nav button .back-ico { display: inline-flex; transform: rotate(180deg); }
+  </style>
 </head>
 <body>
   <div class="app">
     <header class="topbar">
       <div class="brand"><span class="logo" id="brand-logo"></span> Leuffen <span>Doc</span></div>
-      <nav class="crumbs"><a class="here" id="crumb">Klanten</a></nav>
+      <nav class="crumbs"><a id="crumb-home">Klanten</a><span class="sep hidden" id="crumb-sep">/</span>
+        <a class="here hidden" id="crumb-org"></a></nav>
       <div class="spacer"></div>
       <button class="icon-btn" id="theme-btn" title="Thema wisselen"></button>
       <div class="userchip" id="userchip"><span class="avatar" id="avatar"></span>
@@ -26,7 +41,7 @@
       <section>
         <div class="org-layout">
           <aside class="sidebar">
-            <div class="side-label">Documentatie</div>
+            <div class="side-label" id="nav-label">Overzicht</div>
             <div class="nav" id="nav"></div>
           </aside>
 
