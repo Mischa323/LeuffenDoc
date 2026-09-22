@@ -37,6 +37,11 @@ services:
       DOC_M365_CLIENT_ID: ${DOC_M365_CLIENT_ID:-}
       DOC_M365_CLIENT_SECRET: ${DOC_M365_CLIENT_SECRET:-}
 
+      # Always an administrator, whatever the database says: how a fresh
+      # install is set up, and the way back in if nobody is left with the
+      # rights. One or more addresses, comma separated.
+      DOC_BOOTSTRAP_ADMIN: ${DOC_BOOTSTRAP_ADMIN:-}
+
       # Session cookies. Generated into /data on first boot if left unset.
       DOC_SESSION_SECRET: ${DOC_SESSION_SECRET:-}
       # TLS is terminated by your reverse proxy; set to 0 to serve plain HTTP

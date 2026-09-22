@@ -22,6 +22,7 @@ explicit environment variable always wins over one of those.
 | `DOC_PUBLIC_URL` | The address people reach this server at. Sign-in redirects are built from it. |
 | `DOC_RMM_URL` + `DOC_RMM_API_KEY` | Sign in through the RMM, and mirror its users, customers and permissions. The key is made under **Settings → API & webhooks** in the RMM. |
 | `DOC_M365_TENANT` / `DOC_M365_CLIENT_ID` / `DOC_M365_CLIENT_SECRET` | Microsoft 365 sign-in, the fallback for when the RMM is unreachable. |
+| `DOC_BOOTSTRAP_ADMIN` | Addresses (comma separated) that are always administrators, whatever the database says — how a fresh install is set up, and the way back in if nobody is left with the rights. |
 | `DOC_SESSION_SECRET` | Signs session cookies. Generated into the data volume on first boot if unset. |
 | `DOC_SECURE_COOKIES` | `1` by default. Only set to `0` for local HTTP development. |
 | `DOC_TRUST_PROXY` | `1` behind a reverse proxy, so the audit log records the visitor rather than the proxy. `0` if the container is reachable directly. |

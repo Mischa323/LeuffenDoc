@@ -128,6 +128,11 @@
 
   // ---- views ----
   function orgsView() {
+    // A button that simply isn't there reads as a broken button. Say why.
+    const note = state.me.is_admin ? "" : `<div class="callout info" style="margin-bottom:16px">
+        <div class="ic">${ICON.info}</div><div>
+        <div class="ct">Je kunt geen klanten toevoegen</div>
+        <div class="cd">Daar is beheerderstoegang voor nodig, en die heeft je account (<b class="mono">${esc(state.me.email)}</b>) niet. Vraag een beheerder, of zet je adres in <code>DOC_BOOTSTRAP_ADMIN</code>.</div></div></div>`;
     const add = state.me.is_admin ? `
       <div class="panel" id="new-org" style="padding:16px;margin-bottom:16px;display:none">
         <div style="display:flex;gap:8px;align-items:center">
@@ -136,13 +141,13 @@
           <button class="btn ghost sm" id="new-org-cancel">Annuleren</button>
         </div></div>` : "";
     if (!state.orgs.length) {
-      return add + `<div class="panel"><div class="empty"><div class="big">${ICON.building}</div>
+      return note + add + `<div class="panel"><div class="empty"><div class="big">${ICON.building}</div>
         <div>Nog geen klanten</div>
         <div style="font-size:12.5px;margin-top:6px">${state.me.is_admin
           ? "Maak er een aan — documentatie en wachtwoorden horen altijd bij een klant."
           : "Vraag een beheerder om je toegang te geven."}</div></div></div>`;
     }
-    return add + `<div class="cards">${state.orgs.map((o) => `
+    return note + add + `<div class="cards">${state.orgs.map((o) => `
       <div class="orgcard" data-org="${esc(o.id)}">
         <div class="oc-head">${orgMark(o.name)}
           <div><h3>${esc(o.name)}</h3>

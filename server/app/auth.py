@@ -109,6 +109,17 @@ def forwarded_hops(request: Request) -> list[str]:
     return [h.strip() for h in raw.split(",") if h.strip()]
 
 
+def bootstrap_admins() -> set[str]:
+    """Accounts that are administrators whatever the database says.
+
+    `DOC_BOOTSTRAP_ADMIN` (one or more addresses, comma separated) is both the
+    way to set up a fresh install and the way back in when nobody is left with
+    the rights -- rather than editing the database by hand.
+    """
+    raw = os.environ.get("DOC_BOOTSTRAP_ADMIN", "")
+    return {e.strip().lower() for e in raw.replace(";", ",").split(",") if e.strip()}
+
+
 def optional_user(request: Request) -> dict | None:
     raw = request.cookies.get(COOKIE)
     if not raw:
@@ -121,6 +132,8 @@ def optional_user(request: Request) -> dict | None:
         # Signed out everywhere the moment the account is gone -- which is how a
         # removal in the RMM reaches this side.
         return None
+    if user["email"] in bootstrap_admins():
+        user["is_admin"] = 1
     return user
 
 

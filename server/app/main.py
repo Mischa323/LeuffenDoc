@@ -140,13 +140,14 @@ async def dev_login(request: Request):
     if not email or "@" not in email:
         return JSONResponse({"detail": "An email address is required"}, status_code=400)
     # The first account to arrive administers the place; everyone after is not
-    # an administrator until someone makes them one. Note the None: passing
-    # False here would strip the administrator of their rights on their *second*
-    # sign-in, since upsert_user reads False as "set it to no".
-    first = database.user_count() == 0
+    # an administrator until someone makes them one -- unless they are named in
+    # DOC_BOOTSTRAP_ADMIN. Note the None: passing False here would strip the
+    # administrator of their rights on their *second* sign-in, since upsert_user
+    # reads False as "set it to no".
+    admin = database.user_count() == 0 or email in auth.bootstrap_admins()
     database.upsert_user(email, display_name=email.split("@")[0],
-                         is_admin=True if first else None, source="local")
-    response = JSONResponse({"status": "ok", "email": email, "is_admin": first})
+                         is_admin=True if admin else None, source="local")
+    response = JSONResponse({"status": "ok", "email": email, "is_admin": admin})
     auth.sign_in(response, email)
     database.audit("sign-in", user_email=email, detail="development sign-in",
                    ip=auth.client_ip(request))
