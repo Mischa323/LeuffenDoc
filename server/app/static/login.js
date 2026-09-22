@@ -33,19 +33,37 @@
     if (m.rmm) $("btn-rmm").onclick = () => { location.href = "/auth/rmm/start"; };
     if (m.m365) $("btn-m365").onclick = () => { location.href = "/auth/m365/start"; };
     if (m.dev) {
+      const field = $("dev-email");
+      const btn = $("btn-dev");
       const go = async () => {
-        const email = $("dev-email").value.trim();
-        if (!email) return;
-        const res = await fetch("/auth/dev-login", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email }),
-        });
-        if (res.ok) { location.href = "/"; return; }
-        const body = await res.json().catch(() => ({}));
-        note("warn", "Aanmelden lukte niet", body.detail || "Onbekende fout");
+        const email = field.value.trim();
+        if (!email) {
+          // Saying nothing here read as a broken button: the placeholder looks
+          // like a filled-in address, so a click with an empty field did
+          // nothing at all and gave no reason why.
+          note("warn", "Vul eerst je e-mailadres in",
+               "Het grijze adres is een voorbeeld, geen ingevulde waarde.");
+          field.focus();
+          return;
+        }
+        btn.disabled = true;
+        try {
+          const res = await fetch("/auth/dev-login", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email }),
+          });
+          if (res.ok) { location.href = "/"; return; }
+          const body = await res.json().catch(() => ({}));
+          note("warn", "Aanmelden lukte niet", body.detail || `Serverfout ${res.status}`);
+        } catch (e) {
+          note("warn", "Geen verbinding met de server", String(e.message || e));
+        } finally {
+          btn.disabled = false;
+        }
       };
-      $("btn-dev").onclick = go;
-      $("dev-email").addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+      btn.onclick = go;
+      field.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+      field.focus();
     }
     if (!html) {
       note("warn", "Nog geen aanmeldmethode ingesteld",

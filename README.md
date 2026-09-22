@@ -73,6 +73,26 @@ Two things keep that from ending up in the log as their address:
 `DOC_TRUST_PROXY=0` switches the headers off entirely; the log then records the
 proxy's address for everyone.
 
+### Synology DSM as the reverse proxy
+
+DSM's reverse proxy passes almost nothing on by default. In **Control Panel →
+Login Portal → Advanced → Reverse Proxy**, edit the rule and open **Custom
+Header**:
+
+| Header name | Value | Why |
+|---|---|---|
+| `X-Forwarded-Proto` | `$scheme` | Without it the session cookie is set `Secure` over what the server believes is plain HTTP, and the browser drops it — signing in then appears to do nothing. |
+| `X-Forwarded-For` | `$remote_addr` | The visitor's address, for the audit log. `$remote_addr` **replaces** whatever the browser sent, which is the point. |
+| `X-Real-IP` | `$remote_addr` | Not used here, but handy in DSM's own logs. |
+
+(The **Create → WebSocket** preset adds `Upgrade`/`Connection`. LeuffenDoc
+doesn't use WebSockets, so it needs neither — the RMM on the same NAS does.)
+
+Then set `DOC_PROXY_IPS` to the address DSM's proxy connects from: for a
+container on the same NAS that is the Docker bridge gateway (commonly
+`172.17.0.1`), not the NAS's LAN address. Afterwards open **Logboek**, which
+tells you the address it sees you arriving from and names anything still wrong.
+
 **Check it worked:** sign in and open **Logboek**. It says which address the
 server sees you arriving from and over which scheme, and names anything that is
 off (a proxy whose headers aren't being passed on, a missing public address, a

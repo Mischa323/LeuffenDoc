@@ -80,13 +80,24 @@ def trust_proxy() -> bool:
 def client_ip(request: Request) -> str:
     """The caller's address.
 
-    Deliberately *not* read from `X-Forwarded-For` here. That resolution happens
-    one layer down, in uvicorn, which only believes the header when the
-    connection itself comes from an address named in `DOC_PROXY_IPS` -- so a
-    caller reaching the container directly cannot write their own address into
-    the audit log. See `run.py`, and the reverse-proxy section of the README for
-    the matching proxy configuration.
+    Who resolves `X-Forwarded-For` depends on `DOC_PROXY_IPS`:
+
+    * **Pinned to the proxy** -- uvicorn has already done it, and only for
+      connections that actually came from that proxy, so someone reaching the
+      container directly cannot write their own address into the audit log. Its
+      answer stands.
+    * **Left as `*`** -- uvicorn believes any caller and takes the *first* entry
+      of the header, which is exactly the part a browser can write itself. So
+      read it here instead and take the **last** entry: each proxy appends what
+      it saw, so the last one is what *our* proxy saw. (A proxy told to
+      overwrite rather than append sends one entry, and the two agree.)
+
+    See `run.py` and the reverse-proxy section of the README.
     """
+    if trust_proxy() and os.environ.get("DOC_PROXY_IPS", "*").strip() in ("", "*"):
+        hops = forwarded_hops(request)
+        if hops:
+            return hops[-1]
     return request.client.host if request.client else "?"
 
 
