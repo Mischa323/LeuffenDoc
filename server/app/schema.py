@@ -42,6 +42,8 @@ COMPUTER = {
     "icon": "desktop",
     "family": "configuratie",
     "sub": "Werkplekken, laptops, servers en NAS-en",
+    # What a list shows at a glance.
+    "columns": ["role", "status", "os", "installed_at"],
     "groups": [
         {"key": "wat", "label": "Wat het is", "fields": [
             _f("role", "Soort", "select", options=["Werkplek", "Laptop", "Server",
@@ -78,6 +80,8 @@ NETWORK = {
     "icon": "network",
     "family": "configuratie",
     "sub": "Switches, firewalls, routers en access points",
+    # What a list shows at a glance.
+    "columns": ["role", "status", "mgmt_ip"],
     "groups": [
         {"key": "wat", "label": "Wat het is", "fields": [
             _f("role", "Soort", "select",
@@ -109,6 +113,8 @@ PRINTER = {
     "icon": "copy",
     "family": "configuratie",
     "sub": "Printers en multifunctionals",
+    # What a list shows at a glance.
+    "columns": ["status", "placement", "mgmt_ip"],
     "groups": [
         {"key": "wat", "label": "Wat het is", "fields": [
             _f("status", "Status", "select", options=STATUS),
@@ -141,6 +147,8 @@ INTERNET = {
     "icon": "globe",
     "family": "onderdeel",
     "sub": "Lijnen, providers, vaste adressen en contracten",
+    # What a list shows at a glance.
+    "columns": ["provider", "line_type", "speed_down", "contract_until"],
     "groups": [
         {"key": "lijn", "label": "De lijn", "fields": [
             _f("provider", "Provider"),
@@ -174,6 +182,8 @@ LOCATION = {
     "icon": "building",
     "family": "onderdeel",
     "sub": "Vestigingen en panden van deze klant",
+    # What a list shows at a glance.
+    "columns": ["city", "phone"],
     "groups": [
         {"key": "adres", "label": "Adres", "fields": [
             _f("address", "Straat en nummer"),
@@ -195,6 +205,8 @@ CONTACT = {
     "icon": "user",
     "family": "onderdeel",
     "sub": "Wie je bij deze klant belt",
+    # What a list shows at a glance.
+    "columns": ["job", "email", "phone"],
     "groups": [
         {"key": "wie", "label": "Wie", "fields": [
             _f("job", "Functie"),

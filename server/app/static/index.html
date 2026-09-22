@@ -22,6 +22,85 @@
     .org-head h3 { margin: 0; font-size: 17px; font-weight: 650; }
     .org-head small { color: var(--text-faint); font-size: 12.5px; }
     .nav button .back-ico { display: inline-flex; transform: rotate(180deg); }
+
+    /* ---- forms ---- */
+    .frow { margin-bottom: 15px; }
+    .frow > label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px; font-weight: 500; }
+    .frow .inp, .frow select.inp, .frow textarea.inp { width: 100%; }
+    .hint { font-size: 11.5px; color: var(--text-faint); margin-top: 5px; line-height: 1.5; }
+    .form-block { margin-bottom: 14px; }
+    .form-body { padding: 16px 18px 4px; }
+    .form-foot { display: flex; justify-content: flex-end; gap: 9px; margin: 4px 0 20px; }
+    .boolrow { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+    .boolrow input { width: 16px; height: 16px; accent-color: var(--accent); }
+    /* A value the RMM owns is shown, not offered: an input you cannot use still
+       looks like one you forgot to fill in. */
+    .rmm-val { display: flex; align-items: center; gap: 9px; font-size: 13px;
+               padding: 9px 12px; background: var(--surface-2); border: 1px dashed var(--border);
+               border-radius: var(--r-sm); color: var(--text); }
+
+    /* ---- small pills ---- */
+    .tag { display: inline-flex; align-items: center; font-size: 10.5px; font-weight: 600;
+           text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 99px;
+           background: var(--surface-3); color: var(--text-faint); border: 1px solid var(--border); }
+    .tag.warn { background: color-mix(in srgb, var(--warn) 16%, transparent);
+                color: var(--warn); border-color: transparent; }
+
+    /* ---- filter chips above a list ---- */
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+    .chip { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px;
+            background: var(--surface-2); border: 1px solid var(--border); border-radius: 99px;
+            color: var(--text-dim); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+    .chip:hover { border-color: var(--border-strong); color: var(--text); }
+    .chip.on { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+    .chip svg { width: 14px; height: 14px; }
+    .chip .n { font-weight: 700; opacity: .65; }
+    .kind-cell { display: inline-flex; align-items: center; gap: 7px; color: var(--text-dim); }
+    .kind-cell svg { width: 14px; height: 14px; }
+    td.right { text-align: right; }
+
+    /* ---- one item ---- */
+    .item-head { display: flex; align-items: center; gap: 14px; padding: 18px 20px; margin-bottom: 14px; }
+    .ih-mark { width: 42px; height: 42px; border-radius: var(--r-md); flex: none; display: grid;
+               place-items: center; background: var(--surface-3); color: var(--text-dim); }
+    .ih-mark svg { width: 20px; height: 20px; }
+    .ih-txt { flex: 1; min-width: 0; }
+    .ih-txt h3 { margin: 0 0 3px; font-size: 17px; font-weight: 650; }
+    .ih-txt small { color: var(--text-faint); font-size: 12px; display: flex; align-items: center;
+                    gap: 8px; flex-wrap: wrap; }
+    .ih-act { display: flex; gap: 8px; flex: none; }
+
+    .deflist { display: grid; grid-template-columns: 210px 1fr; }
+    .deflist .dt, .deflist .dd { padding: 11px 18px; border-bottom: 1px solid var(--border-soft);
+                                 font-size: 13px; }
+    .deflist .dt { color: var(--text-dim); display: flex; align-items: center; gap: 8px; }
+    .deflist .dd { white-space: pre-wrap; }
+    .deflist .dd a { color: var(--accent); cursor: pointer; }
+    .deflist > :nth-last-child(-n+2) { border-bottom: 0; }
+    @media (max-width: 720px) { .deflist { grid-template-columns: 1fr; }
+      .deflist .dt { padding-bottom: 0; border-bottom: 0; } }
+
+    /* ---- related ---- */
+    .rel-row { display: flex; align-items: center; gap: 11px; padding: 11px 18px;
+               border-bottom: 1px solid var(--border-soft); cursor: pointer; font-size: 13px; }
+    .rel-row:hover { background: var(--surface-hover); }
+    .rel-ic { color: var(--text-faint); display: inline-flex; }
+    .rel-name { font-weight: 550; }
+    .rel-row small { color: var(--text-faint); margin-left: auto; }
+    .rel-add { display: flex; gap: 9px; padding: 14px 18px; border-top: 1px solid var(--border-soft); }
+    .rel-add .inp { flex: 1; }
+
+    /* ---- history ---- */
+    .rev-row { padding: 13px 18px; border-bottom: 1px solid var(--border-soft); }
+    .rev-row:last-child { border-bottom: 0; }
+    .rev-top { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
+    .rev-top .btn { margin-left: auto; }
+    .rev-change { display: flex; align-items: baseline; gap: 9px; margin-top: 7px; font-size: 12.5px;
+                  flex-wrap: wrap; }
+    .rc-field { color: var(--text-dim); min-width: 150px; }
+    .rc-from { color: var(--text-faint); text-decoration: line-through; }
+    .rc-arrow { color: var(--text-faint); }
+    .rc-to { font-weight: 550; }
   </style>
 </head>
 <body>
@@ -57,6 +136,7 @@
     </main>
   </div>
   <script src="/icons.js"></script>
+  <script src="/items.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

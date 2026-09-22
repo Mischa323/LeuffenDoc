@@ -15,7 +15,7 @@
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-  const state = { me: null, orgs: [], org: null, tab: "klanten" };
+  const state = { me: null, orgs: [], org: null, tab: "klanten", item: null };
 
   // Top level: only what is not tied to a single customer.
   const GLOBAL = [
@@ -28,16 +28,31 @@
       sub: "Wie heeft wat bekeken en gewijzigd", admin: true },
   ];
 
-  // Inside a customer.
+  // Inside a customer. `kinds` names what a section lists; a section without it
+  // is not built yet and says so rather than pretending.
   const ORG = [
     { id: "overzicht", label: "Overzicht", icon: "grid", title: "Overzicht",
       sub: "Wat er van deze klant bekend is" },
-    { id: "documenten", label: "Documenten", icon: "file", title: "Documenten",
-      sub: "Pagina's, mappen en bijlagen van deze klant",
-      soon: "Documenten met een editor, mappen, labels, versies om op terug te vallen en zoeken over alles heen." },
+    { id: "configuraties", label: "Configuraties", icon: "desktop", title: "Configuraties",
+      sub: "De apparatuur van deze klant", kinds: ["computer", "network", "printer"],
+      example: "WS-014 of SW-01",
+      empty: "Computers, servers, switches, firewalls en printers — met wie ze installeerde en waar ze hangen." },
+    { id: "internet", label: "Internetverbindingen", icon: "globe", title: "Internetverbindingen",
+      sub: "Lijnen, contracten en storingsnummers", kinds: ["internet"],
+      example: "KPN glasvezel hoofdkantoor",
+      empty: "Provider, snelheid, vast IP-blok, contract en wie je belt als de lijn eruit ligt." },
+    { id: "locaties", label: "Locaties", icon: "building", title: "Locaties",
+      sub: "Vestigingen en panden", kinds: ["location"], example: "Hoofdkantoor",
+      empty: "Panden met hun adres en hoe je er binnenkomt. Apparatuur wijst hiernaar." },
+    { id: "contacten", label: "Contactpersonen", icon: "user", title: "Contactpersonen",
+      sub: "Wie je bij deze klant belt", kinds: ["contact"], example: "Jan de Vries",
+      empty: "De mensen bij deze klant, met hun functie en nummer." },
     { id: "wachtwoorden", label: "Wachtwoorden", icon: "key", title: "Wachtwoorden",
       sub: "Versleutelde kluis van deze klant",
-      soon: "Wachtwoorden worden versleuteld opgeslagen met een sleutel per klant. Tonen en kopiëren is een apart recht, en komt altijd in het logboek." },
+      soon: "Wachtwoorden worden versleuteld opgeslagen en zijn te koppelen aan een apparaat of een lijn, zodat ze staan waar je ze zoekt. Tonen en kopiëren komt altijd in het logboek." },
+    { id: "documenten", label: "Documenten", icon: "file", title: "Documenten",
+      sub: "Vrije pagina's van deze klant",
+      soon: "Voor wat niet in velden past: procedures, uitleg, hoe je iets herstart. Te koppelen aan de apparatuur waar ze over gaan." },
   ];
 
   async function api(path, opts) {
@@ -47,6 +62,25 @@
     if (!res.ok) throw new Error(body.detail || `${res.status}`);
     return body;
   }
+
+  // A short word after an action. Without it a save looks exactly like a
+  // button that did nothing.
+  let toastTimer = null;
+  function toast(message) {
+    let el = $("toast");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "toast";
+      el.className = "toast";
+      document.body.appendChild(el);
+    }
+    el.innerHTML = `${ICON.check}<span>${esc(message)}</span>`;
+    el.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove("show"), 2600);
+  }
+
+  const Items = window.DocItems({ api, esc, go, toast });
 
   // ---- theme (remembered per browser) ----
   // Sun and moon aren't in the shared icon set, and a theme switch that shows an
@@ -82,11 +116,19 @@
   }
 
   function route() {
-    const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+    const parts = location.hash.split("?")[0].replace(/^#\/?/, "").split("/").filter(Boolean);
     if (parts[0] === "klant" && parts[1]) {
       state.org = state.orgs.find((o) => o.id === parts[1]) || null;
-      state.tab = state.org && ORG.some((t) => t.id === parts[2]) ? parts[2] : "overzicht";
+      // `.../item/<id>` opens one thing; everything else is a section.
+      if (state.org && parts[2] === "item" && parts[3]) {
+        state.item = parts[3];
+        state.tab = "overzicht";
+      } else {
+        state.item = null;
+        state.tab = state.org && ORG.some((t) => t.id === parts[2]) ? parts[2] : "overzicht";
+      }
     } else {
+      state.item = null;
       state.org = null;
       const tabs = tabsHere();
       state.tab = tabs.some((t) => t.id === parts[0]) ? parts[0] : "klanten";
@@ -158,11 +200,14 @@
       </div>`).join("")}</div>`;
   }
 
-  function overviewView() {
+  async function overviewView() {
     const o = state.org;
     const initials = o.name.trim().split(/\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase();
     let h = 0;
     for (const ch of o.name) h = (h * 31 + ch.charCodeAt(0)) % 360;
+    const summary = await api(`/api/orgs/${o.id}/summary`).catch(() => ({ counts: {} }));
+    const counts = summary.counts || {};
+    const sections = ORG.filter((t) => t.id !== "overzicht");
     return `<div class="panel" style="padding:20px;margin-bottom:16px">
         <div class="org-head">
           <span class="mark" style="background:hsl(${h} 55% 45%)">${esc(initials)}</span>
@@ -172,14 +217,15 @@
               : "nog niet gekoppeld aan een organisatie in de RMM"}</small></div>
         </div></div>
       <div class="cards">
-        ${[["documenten", "file", "Documenten", "Pagina's over deze klant"],
-           ["wachtwoorden", "key", "Wachtwoorden", "De kluis van deze klant"]]
-          .map(([id, icon, title, sub]) => `
-          <div class="orgcard" data-tab="${id}">
-            <div class="oc-head"><span class="oc-mark" style="background:var(--surface-3);color:var(--text-dim)">${ICON[icon]}</span>
-              <div><h3>${title}</h3><small>${sub}</small></div>
+        ${sections.map((t) => {
+          const n = (t.kinds || []).reduce((sum, k) => sum + (counts[k] || 0), 0);
+          const what = t.kinds ? (n === 1 ? "1 vastgelegd" : `${n} vastgelegd`) : "nog niet gebouwd";
+          return `<div class="orgcard" data-tab="${t.id}">
+            <div class="oc-head"><span class="oc-mark" style="background:var(--surface-3);color:var(--text-dim)">${ICON[t.icon]}</span>
+              <div><h3>${esc(t.label)}</h3><small>${esc(what)}</small></div>
               <span class="oc-arrow">${ICON.chevR}</span></div>
-          </div>`).join("")}
+          </div>`;
+        }).join("")}
       </div>`;
   }
 
@@ -248,17 +294,57 @@
     $("page-sub").textContent = tab.sub;
     crumbs();
     renderNav();
-
-    $("page-actions").innerHTML = (!state.org && tab.id === "klanten" && state.me.is_admin)
-      ? `<button class="btn sm" id="add-org">${ICON.plus} Klant toevoegen</button>` : "";
+    $("page-actions").innerHTML = "";
 
     if (state.org) {
-      $("view").innerHTML = tab.id === "overzicht" ? overviewView() : soonView(tab);
-      $("view").querySelectorAll("[data-tab]").forEach((el) => {
-        el.onclick = () => go(`#/klant/${state.org.id}/${el.dataset.tab}`);
-      });
+      // One open thing: which section it belongs to follows from its kind, so
+      // the sidebar keeps pointing at where you came from.
+      if (state.item) {
+        $("view").innerHTML = `<div class="panel"><div class="empty">Laden…</div></div>`;
+        let item = null;
+        try {
+          item = await Items.detailView($("view"), state.org, state.item);
+        } catch (e) {
+          $("view").innerHTML = `<div class="callout warn"><div class="ic">${ICON.alert}</div>
+            <div><div class="ct">Niet gevonden</div><div class="cd">${esc(e.message)}</div></div></div>`;
+          return;
+        }
+        const section = ORG.find((t) => (t.kinds || []).includes(item.kind));
+        if (section) {
+          state.tab = section.id;
+          renderNav();
+          $("page-actions").innerHTML =
+            `<button class="btn ghost sm" id="back-list">${ICON.chevR} Terug naar ${esc(section.label.toLowerCase())}</button>`;
+          $("back-list").onclick = () => go(`#/klant/${state.org.id}/${section.id}`);
+          $("back-list").querySelector("svg").style.transform = "rotate(180deg)";
+        }
+        $("page-title").textContent = item.name;
+        $("page-sub").textContent = section ? section.title : "";
+        return;
+      }
+
+      if (tab.kinds) {
+        $("page-actions").innerHTML =
+          `<button class="btn sm" id="add-item">${ICON.plus} Toevoegen</button>`;
+        await Items.listView($("view"), state.org, tab);
+        $("add-item").onclick = () => Items.openCreate(state.org, tab, $("view"));
+        return;
+      }
+
+      if (tab.id === "overzicht") {
+        $("view").innerHTML = await overviewView();
+        $("view").querySelectorAll("[data-tab]").forEach((el) => {
+          el.onclick = () => go(`#/klant/${state.org.id}/${el.dataset.tab}`);
+        });
+        return;
+      }
+      $("view").innerHTML = soonView(tab);
       return;
     }
+
+    $("page-actions").innerHTML = (tab.id === "klanten" && state.me.is_admin)
+      ? `<button class="btn sm" id="add-org">${ICON.plus} Klant toevoegen</button>` : "";
+
     if (tab.id === "logboek") { $("view").innerHTML = await auditView(); return; }
     if (tab.id === "types") { $("view").innerHTML = soonView(tab); return; }
 
