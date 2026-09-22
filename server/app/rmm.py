@@ -297,15 +297,20 @@ def sync_devices() -> dict:
         if existing:
             database.update_item(existing["id"], rmm=payload, rmm_keys=keys,
                                  by=None, source="rmm", label=label)
+            # Adapters are matched on their MAC, so the port a machine is
+            # patched into survives a renamed or reordered interface.
+            database.sync_adapters(existing["id"], payload.get("nics"))
             updated += 1
         else:
             # The name and the kind of machine are a starting point, not a
             # standing instruction: rename it here and the next sync leaves it
             # alone, because only the RMM's own fields are refreshed.
-            database.create_item(org_id, "computer", device.get("hostname") or device["id"],
-                                 {"role": _role(device), "status": "In gebruik"},
-                                 by=None, source="rmm", rmm_device_id=device["id"],
-                                 rmm=payload, label=label)
+            item = database.create_item(org_id, "computer",
+                                        device.get("hostname") or device["id"],
+                                        {"role": _role(device), "status": "In gebruik"},
+                                        by=None, source="rmm", rmm_device_id=device["id"],
+                                        rmm=payload, label=label)
+            database.sync_adapters(item["id"], payload.get("nics"))
             made += 1
 
     # A device that is no longer in the RMM keeps its page and says so. It is

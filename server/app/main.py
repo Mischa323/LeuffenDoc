@@ -371,9 +371,14 @@ def _labeller(kind: str):
 
 def _decorate(item: dict) -> dict:
     """An item as the interface wants it: its own fields, what the RMM knows,
-    and what it is related to."""
+    what it is related to, its network adapters, and -- for a switch -- the
+    patch list of its ports."""
     item = dict(item)
     item["relations"] = database.relations_of(item["id"])
+    if item["kind"] in schema.ADAPTER_KINDS:
+        item["adapters"] = database.list_adapters(item["id"])
+    if has_ports(item):
+        item["ports"] = database.ports_of(item["id"], port_count(item))
     return item
 
 
@@ -496,6 +501,15 @@ def revert_revision(revision_id: int, request: Request,
     if not revision["changes"]:
         raise HTTPException(status_code=400,
                             detail="Bij deze regel staan geen veldwijzigingen om terug te draaien")
+    # A cable moved to another port, or an adapter added, is not undone by
+    # writing an old value back into a field -- so it is refused here rather
+    # than quietly doing nothing.
+    own = set(schema.fields_of(item["kind"])) | {"naam"}
+    outside = [c["label"] for c in revision["changes"] if c["key"] not in own]
+    if outside:
+        raise HTTPException(status_code=400,
+                            detail=f"Dit is geen veldwijziging: {outside[0]}. "
+                                   "Draai dat terug waar het gebeurde.")
     name = None
     fields = {}
     for change in revision["changes"]:
@@ -554,6 +568,201 @@ def drop_relation(relation_id: str, request: Request,
     database.audit("item.unrelate", user_email=user["email"], org_id=item["org_id"],
                    target=item["name"], ip=auth.client_ip(request))
     return {"status": "ok"}
+
+
+# --------------------------------------------------------------------------- #
+# Network adapters and switch ports
+#
+# A machine gets its adapters, each with the MAC that is actually on the end of
+# the cable, and an adapter is patched into a port of a switch that is itself a
+# configuration here. One place holds that connection, so the machine's page and
+# the switch's patch list can never tell two different stories.
+# --------------------------------------------------------------------------- #
+# What the RMM fills in on an adapter it reported; the rest stays yours.
+RMM_ADAPTER_FIELDS = {"name", "mac", "ipv4", "ipv6"}
+
+
+def port_count(item: dict) -> int:
+    try:
+        return int(item["fields"].get("ports") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def has_ports(item: dict) -> bool:
+    return item["kind"] == "network" and (item["fields"].get("role") == "Switch"
+                                          or port_count(item) > 0)
+
+
+def _adapter_for(user: dict, adapter_id: str) -> tuple:
+    adapter = database.get_adapter(adapter_id)
+    if not adapter:
+        raise HTTPException(status_code=404, detail="Deze netwerkadapter bestaat niet")
+    item, _ = _item_for(user, adapter["item_id"])
+    return adapter, item
+
+
+@app.get("/api/items/{item_id}/adapters")
+def item_adapters(item_id: str, user: dict = Depends(auth.current_user)):
+    _item_for(user, item_id)
+    return database.list_adapters(item_id)
+
+
+@app.post("/api/items/{item_id}/adapters")
+async def add_adapter(item_id: str, request: Request,
+                      user: dict = Depends(auth.current_user)):
+    item, _ = _item_for(user, item_id)
+    if item["kind"] not in schema.ADAPTER_KINDS:
+        raise HTTPException(status_code=400,
+                            detail=f"Een {schema.KINDS[item['kind']]['label'].lower()} "
+                                   "heeft geen netwerkadapters")
+    body = await request.json()
+    values = {k: (str(body.get(k) or "").strip()) for k in database.ADAPTER_FIELDS}
+    if not values["name"] and not values["mac"]:
+        raise HTTPException(status_code=400, detail="Geef de adapter een naam of een MAC-adres")
+    adapter = database.add_adapter(item_id, values)
+    database.record(item_id, "updated",
+                    [{"key": "adapter", "label": "Netwerkadapter toegevoegd",
+                      "from": "", "to": values["name"] or values["mac"]}],
+                    by=user["email"])
+    database.audit("adapter.add", user_email=user["email"], org_id=item["org_id"],
+                   target=item["name"], detail=values["name"] or values["mac"],
+                   ip=auth.client_ip(request))
+    return adapter
+
+
+@app.patch("/api/adapters/{adapter_id}")
+async def edit_adapter(adapter_id: str, request: Request,
+                       user: dict = Depends(auth.current_user)):
+    adapter, item = _adapter_for(user, adapter_id)
+    body = await request.json()
+    values = {k: str(body.get(k) or "").strip() for k in database.ADAPTER_FIELDS if k in body}
+    if adapter["source"] == "rmm":
+        # Name, MAC and addresses come from the machine itself. Accepting a new
+        # value here would mean showing it until the next sync quietly replaced
+        # it again, which is worse than saying no.
+        values = {k: v for k, v in values.items() if k not in RMM_ADAPTER_FIELDS}
+    updated, changes = database.update_adapter(adapter_id, values)
+    if changes:
+        database.record(item["id"], "updated", changes, by=user["email"])
+    return updated
+
+
+@app.delete("/api/adapters/{adapter_id}")
+def remove_adapter(adapter_id: str, request: Request,
+                   user: dict = Depends(auth.current_user)):
+    adapter, item = _adapter_for(user, adapter_id)
+    if adapter["source"] == "rmm":
+        raise HTTPException(status_code=400,
+                            detail="Deze adapter komt uit de RMM en verdwijnt vanzelf "
+                                   "zodra de machine hem niet meer heeft")
+    database.delete_adapter(adapter_id)
+    database.record(item["id"], "updated",
+                    [{"key": "adapter", "label": "Netwerkadapter verwijderd",
+                      "from": adapter["name"] or adapter["mac"] or "", "to": ""}],
+                    by=user["email"])
+    database.audit("adapter.delete", user_email=user["email"], org_id=item["org_id"],
+                   target=item["name"], ip=auth.client_ip(request))
+    return {"status": "ok"}
+
+
+# --------------------------------------------------------------------------- #
+# Patching
+# --------------------------------------------------------------------------- #
+def _where(adapter: dict, item: dict) -> str:
+    return f"{item['name']} – {adapter['name'] or adapter['mac'] or 'adapter'}"
+
+
+@app.post("/api/adapters/{adapter_id}/connect")
+async def connect_adapter(adapter_id: str, request: Request,
+                          user: dict = Depends(auth.current_user)):
+    adapter, item = _adapter_for(user, adapter_id)
+    body = await request.json()
+    switch, _ = _item_for(user, (body.get("switch_id") or "").strip())
+    if switch["org_id"] != item["org_id"]:
+        raise HTTPException(status_code=400, detail="Die switch hoort bij een andere klant")
+    if not has_ports(switch):
+        raise HTTPException(status_code=400,
+                            detail=f"{switch['name']} is geen switch met poorten")
+    try:
+        number = int(body.get("port"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Kies een poortnummer")
+    count = port_count(switch)
+    if number < 1 or (count and number > count):
+        raise HTTPException(status_code=400,
+                            detail=f"{switch['name']} heeft poort 1 tot en met {count}")
+    holder = database.port_holder(switch["id"], number)
+    if holder and holder["id"] != adapter_id:
+        raise HTTPException(status_code=409,
+                            detail=f"Poort {number} is al bezet door {holder['item_name']} "
+                                   f"({holder['name'] or 'adapter'})")
+
+    was = database.port_of_adapter(adapter_id)
+    database.set_port(switch["id"], number, label=body.get("label"),
+                      vlan=body.get("vlan"), adapter_id=adapter_id, by=user["email"])
+    moved = [{"key": "port", "label": f"{adapter['name'] or 'Adapter'} aangesloten op",
+              "from": f"{was['switch_name']} poort {was['number']}" if was else "",
+              "to": f"{switch['name']} poort {number}"}]
+    database.record(item["id"], "updated", moved, by=user["email"])
+    # The switch's own history should show it too: its patch list changed.
+    database.record(switch["id"], "updated",
+                    [{"key": "port", "label": f"Poort {number}",
+                      "from": "", "to": _where(adapter, item)}], by=user["email"])
+    database.audit("port.connect", user_email=user["email"], org_id=item["org_id"],
+                   target=f"{switch['name']} poort {number}", detail=_where(adapter, item),
+                   ip=auth.client_ip(request))
+    return database.list_adapters(item["id"])
+
+
+@app.post("/api/adapters/{adapter_id}/disconnect")
+def disconnect_adapter(adapter_id: str, request: Request,
+                       user: dict = Depends(auth.current_user)):
+    adapter, item = _adapter_for(user, adapter_id)
+    was = database.port_of_adapter(adapter_id)
+    if not was:
+        return database.list_adapters(item["id"])
+    database.set_port(was["switch_id"], was["number"], clear_adapter=True, by=user["email"])
+    database.record(item["id"], "updated",
+                    [{"key": "port", "label": f"{adapter['name'] or 'Adapter'} losgekoppeld van",
+                      "from": f"{was['switch_name']} poort {was['number']}", "to": ""}],
+                    by=user["email"])
+    database.record(was["switch_id"], "updated",
+                    [{"key": "port", "label": f"Poort {was['number']}",
+                      "from": _where(adapter, item), "to": ""}], by=user["email"])
+    database.audit("port.disconnect", user_email=user["email"], org_id=item["org_id"],
+                   target=f"{was['switch_name']} poort {was['number']}",
+                   ip=auth.client_ip(request))
+    return database.list_adapters(item["id"])
+
+
+@app.get("/api/items/{item_id}/ports")
+def switch_ports(item_id: str, user: dict = Depends(auth.current_user)):
+    item, _ = _item_for(user, item_id)
+    if not has_ports(item):
+        raise HTTPException(status_code=400, detail="Dit apparaat heeft geen poortenlijst")
+    return database.ports_of(item_id, port_count(item))
+
+
+@app.patch("/api/items/{item_id}/ports/{number}")
+async def edit_port(item_id: str, number: int, request: Request,
+                    user: dict = Depends(auth.current_user)):
+    """A port's own label and VLAN, and unpatching from the switch's side."""
+    item, _ = _item_for(user, item_id)
+    if not has_ports(item):
+        raise HTTPException(status_code=400, detail="Dit apparaat heeft geen poortenlijst")
+    body = await request.json()
+    clear = body.get("adapter_id", "keep") is None
+    if clear:
+        holder = database.port_holder(item_id, number)
+        if holder:
+            database.record(item_id, "updated",
+                            [{"key": "port", "label": f"Poort {number}",
+                              "from": f"{holder['item_name']} – {holder['name'] or 'adapter'}",
+                              "to": ""}], by=user["email"])
+    database.set_port(item_id, number, label=body.get("label"), vlan=body.get("vlan"),
+                      clear_adapter=clear, by=user["email"])
+    return database.ports_of(item_id, port_count(item))
 
 
 # --------------------------------------------------------------------------- #

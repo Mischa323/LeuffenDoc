@@ -109,6 +109,29 @@
     .due-row:hover .due-name { text-decoration: underline; }
     .due-name { font-weight: 600; min-width: 160px; }
     .due-row .muted:last-child { margin-left: auto; }
+
+    /* ---- network adapters ---- */
+    .ad-row { display: grid; grid-template-columns: 1fr auto auto; align-items: center;
+              gap: 12px; padding: 11px 18px; border-bottom: 1px solid var(--border-soft);
+              font-size: 13px; }
+    .ad-main { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+    .ad-name { font-weight: 600; }
+    .ad-mac { color: var(--text-faint); font-size: 12px; }
+    .ad-port { display: flex; align-items: center; gap: 8px; }
+    .ad-port a { color: var(--accent); cursor: pointer; }
+    .port-no { color: var(--text-dim); }
+    .ad-act { display: flex; gap: 6px; }
+    .ad-form, #ad-new { grid-column: 1 / -1; }
+    .plug-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+                padding: 12px 0 2px; }
+    .panel-head .spacer { flex: 1; }
+
+    /* ---- a switch's patch list ---- */
+    table.grid.ports td { padding: 8px 18px; }
+    table.grid.ports tbody tr { cursor: default; }
+    table.grid.ports tbody tr.free td { color: var(--text-faint); }
+    table.grid.ports .pnum { font-weight: 700; width: 90px; }
+    table.grid.ports a { color: var(--accent); cursor: pointer; }
   </style>
 </head>
 <body>

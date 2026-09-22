@@ -588,3 +588,192 @@ def relations_of(item_id: str) -> list:
         "FROM relations r JOIN items i ON i.id = CASE WHEN r.a_id=? THEN r.b_id ELSE r.a_id END "
         "WHERE r.a_id=? OR r.b_id=? ORDER BY i.kind, i.name COLLATE NOCASE",
         (item_id, item_id, item_id))
+
+
+# --------------------------------------------------------------------------- #
+# Network adapters, and the switch ports they hang on
+#
+# The connection is kept on the *port*, not on the adapter. That way a port can
+# exist while empty -- which is how you find a free one -- and the database
+# itself refuses to let two machines claim the same port, rather than trusting
+# everyone to notice.
+#
+# Ports are not created in advance. A 48-port switch would mean 48 empty rows
+# waiting for someone to use them, and changing the port count would mean
+# reconciling them. Only a port somebody has actually done something with is
+# stored; the rest of the list is worked out from the switch's port count.
+# --------------------------------------------------------------------------- #
+ADAPTER_FIELDS = {"name": "Naam", "mac": "MAC-adres", "ipv4": "IPv4-adres",
+                  "ipv6": "IPv6-adres", "assignment": "Toewijzing",
+                  "vlan": "VLAN", "speed": "Snelheid"}
+
+
+def record(item_id: str, action: str, changes: list, by: str | None,
+           source: str = "manual") -> None:
+    """Write one line of history by hand, for the things that are not fields --
+    an adapter added, a cable moved to another port."""
+    with write() as conn:
+        conn.execute("INSERT INTO revisions (item_id, at, user_email, source, action, "
+                     "changes_json) VALUES (?, ?, ?, ?, ?, ?)",
+                     (item_id, time.time(), by, source, action, json.dumps(changes)))
+
+
+def list_adapters(item_id: str) -> list:
+    """Every adapter of one machine, each with the port it is patched into."""
+    out = []
+    for r in rows("SELECT * FROM adapters WHERE item_id=? ORDER BY name COLLATE NOCASE", (item_id,)):
+        r = dict(r)
+        r["port"] = row(
+            "SELECT p.number, p.label, p.vlan, i.id AS switch_id, i.name AS switch_name "
+            "FROM switch_ports p JOIN items i ON i.id = p.switch_id WHERE p.adapter_id=?",
+            (r["id"],))
+        out.append(r)
+    return out
+
+
+def get_adapter(adapter_id: str) -> dict | None:
+    return row("SELECT * FROM adapters WHERE id=?", (adapter_id,))
+
+
+def add_adapter(item_id: str, values: dict, source: str = "manual") -> dict:
+    now = time.time()
+    adapter_id = uuid.uuid4().hex[:12]
+    keys = [k for k in ADAPTER_FIELDS if k in values]
+    with write() as conn:
+        conn.execute(
+            f"INSERT INTO adapters (id, item_id, source, created_at, updated_at"
+            f"{''.join(', ' + k for k in keys)}) "
+            f"VALUES (?, ?, ?, ?, ?{', ?' * len(keys)})",
+            (adapter_id, item_id, source, now, now, *[values[k] for k in keys]))
+    return get_adapter(adapter_id)
+
+
+def update_adapter(adapter_id: str, values: dict) -> tuple:
+    """Returns the adapter and what changed, so the caller can write it down."""
+    before = get_adapter(adapter_id)
+    if not before:
+        raise KeyError(adapter_id)
+    keys = [k for k in ADAPTER_FIELDS if k in values]
+    changes = [{"key": k, "label": f"{before['name'] or 'Adapter'} – {ADAPTER_FIELDS[k]}",
+                "from": before[k] or "", "to": values[k] or ""}
+               for k in keys if (before[k] or "") != (values[k] or "")]
+    if keys:
+        with write() as conn:
+            conn.execute(f"UPDATE adapters SET {', '.join(k + '=?' for k in keys)}, updated_at=? "
+                         f"WHERE id=?", (*[values[k] for k in keys], time.time(), adapter_id))
+    return get_adapter(adapter_id), changes
+
+
+def delete_adapter(adapter_id: str) -> None:
+    with write() as conn:
+        conn.execute("DELETE FROM adapters WHERE id=?", (adapter_id,))
+
+
+def sync_adapters(item_id: str, nics: list) -> None:
+    """Bring a machine's adapters in line with what the RMM reports.
+
+    Matched on the MAC address rather than on position or name, so an adapter
+    that is renamed keeps the port it is patched into -- the MAC is the thing
+    that is actually on the end of the cable.
+    """
+    existing = {(a["mac"] or "").lower(): a for a in
+                rows("SELECT * FROM adapters WHERE item_id=? AND source='rmm'", (item_id,))}
+    seen = set()
+    for nic in nics or []:
+        mac = (nic.get("mac") or "").lower()
+        if not mac:
+            continue                      # without a MAC there is nothing to match on
+        seen.add(mac)
+        values = {"name": nic.get("name") or "", "mac": nic.get("mac") or "",
+                  "ipv4": ", ".join(nic.get("ipv4") or []),
+                  "ipv6": ", ".join(nic.get("ipv6") or [])}
+        if mac in existing:
+            update_adapter(existing[mac]["id"], values)
+        else:
+            add_adapter(item_id, values, source="rmm")
+    for mac, adapter in existing.items():
+        if mac not in seen:
+            delete_adapter(adapter["id"])
+
+
+# --------------------------------------------------------------------------- #
+# Ports
+# --------------------------------------------------------------------------- #
+def ports_of(switch_id: str, count: int) -> list:
+    """The patch list of one switch: every port, taken or free.
+
+    A port beyond the switch's port count is still listed when something is on
+    it -- lowering the number in a form should not quietly hide a machine.
+    """
+    stored = {}
+    for r in rows(
+            "SELECT p.*, a.name AS adapter_name, a.mac AS adapter_mac, "
+            "i.id AS item_id, i.name AS item_name, i.kind AS item_kind "
+            "FROM switch_ports p LEFT JOIN adapters a ON a.id = p.adapter_id "
+            "LEFT JOIN items i ON i.id = a.item_id WHERE p.switch_id=?", (switch_id,)):
+        stored[r["number"]] = r
+    highest = max([count or 0] + list(stored) + [0])
+    out = []
+    for number in range(1, highest + 1):
+        r = stored.get(number)
+        out.append({
+            "number": number,
+            "beyond": number > (count or 0),
+            "label": (r or {}).get("label") or "",
+            "vlan": (r or {}).get("vlan") or "",
+            "adapter": ({"id": r["adapter_id"], "name": r["adapter_name"],
+                         "mac": r["adapter_mac"], "item_id": r["item_id"],
+                         "item_name": r["item_name"], "item_kind": r["item_kind"]}
+                        if r and r.get("adapter_id") else None),
+        })
+    return out
+
+
+def set_port(switch_id: str, number: int, label=None, vlan=None,
+             adapter_id: str | None = None, clear_adapter: bool = False,
+             by: str | None = None) -> None:
+    """Write one port. `adapter_id` patches something in; `clear_adapter`
+    unpatches whatever was there."""
+    now = time.time()
+    with write() as conn:
+        existing = conn.execute(
+            "SELECT * FROM switch_ports WHERE switch_id=? AND number=?",
+            (switch_id, number)).fetchone()
+        if adapter_id:
+            # One cable per port, and one port per cable: an adapter moving to a
+            # new port leaves its old one empty rather than appearing on both.
+            conn.execute("UPDATE switch_ports SET adapter_id=NULL, updated_at=? "
+                         "WHERE adapter_id=?", (now, adapter_id))
+        if existing:
+            sets, args = [], []
+            if label is not None:
+                sets.append("label=?")
+                args.append(label)
+            if vlan is not None:
+                sets.append("vlan=?")
+                args.append(vlan)
+            if adapter_id or clear_adapter:
+                sets.append("adapter_id=?")
+                args.append(None if clear_adapter else adapter_id)
+            sets += ["updated_at=?", "updated_by=?"]
+            args += [now, by]
+            conn.execute(f"UPDATE switch_ports SET {', '.join(sets)} WHERE id=?",
+                         (*args, existing["id"]))
+        else:
+            conn.execute(
+                "INSERT INTO switch_ports (id, switch_id, number, label, vlan, adapter_id, "
+                "updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (uuid.uuid4().hex[:12], switch_id, number, label or None, vlan or None,
+                 None if clear_adapter else adapter_id, now, by))
+
+
+def port_of_adapter(adapter_id: str) -> dict | None:
+    return row("SELECT p.number, p.switch_id, i.name AS switch_name FROM switch_ports p "
+               "JOIN items i ON i.id = p.switch_id WHERE p.adapter_id=?", (adapter_id,))
+
+
+def port_holder(switch_id: str, number: int) -> dict | None:
+    """What is already on a port, so a second claim can say what is in the way."""
+    return row("SELECT a.id, a.name, i.name AS item_name FROM switch_ports p "
+               "JOIN adapters a ON a.id = p.adapter_id JOIN items i ON i.id = a.item_id "
+               "WHERE p.switch_id=? AND p.number=?", (switch_id, number))

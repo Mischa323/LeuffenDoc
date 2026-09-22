@@ -338,7 +338,9 @@ window.DocItems = function (ctx) {
         + (editing ? `<div id="edit-fields">${formHtml(item.kind, item, all, org.id)}</div>
              <div class="form-foot"><button class="btn ghost" id="edit-cancel">Annuleren</button>
                <button class="btn" id="edit-save">${ICON.save} Opslaan</button></div>`
-                   : readBlocks() + `<div id="related"></div><div id="history"></div>`);
+                   : readBlocks()
+                     + `<div id="adapters"></div><div id="ports"></div>`
+                     + `<div id="related"></div><div id="history"></div>`);
       wireHead();
       const goneBtn = host.querySelector("#gone-archive");
       if (goneBtn) goneBtn.onclick = () => host.querySelector("#btn-archive").click();
@@ -351,6 +353,8 @@ window.DocItems = function (ctx) {
         host.querySelectorAll("[data-goto]").forEach((a) => {
           a.onclick = () => go(`#/klant/${org.id}/item/${a.dataset.goto}`);
         });
+        await drawAdapters();
+        await drawPorts();
         await drawRelated();
         await drawHistory();
       }
@@ -390,6 +394,198 @@ window.DocItems = function (ctx) {
         toast("Opgeslagen");
         draw();
       } catch (e) { toast(e.message); btn.disabled = false; }
+    }
+
+    /* Network adapters, and the port each one is patched into.
+
+       You make the connection here, on the machine, because that is where you
+       are when you know the answer — but it is kept on the port, so the switch
+       can show its patch list and no two machines can claim one port. */
+    async function drawAdapters() {
+      const slot = host.querySelector("#adapters");
+      if (!slot) return;
+      const adapters = item.adapters || [];
+      const switches = all.filter((i) => i.kind === "network" && !i.archived
+        && (i.fields.role === "Switch" || Number(i.fields.ports || 0) > 0));
+
+      const rows = adapters.length ? adapters.map((a) => {
+        const where = a.port
+          ? `<a data-goto="${esc(a.port.switch_id)}">${esc(a.port.switch_name)}</a>
+             <span class="port-no">poort ${a.port.number}</span>`
+          : `<span class="muted">niet aangesloten</span>`;
+        return `<div class="ad-row">
+          <div class="ad-main">
+            <span class="ad-name">${esc(a.name || "Adapter")}</span>
+            ${a.source === "rmm" ? '<span class="tag">RMM</span>' : ""}
+            <span class="mono ad-mac">${esc(a.mac || "—")}</span>
+            <span class="muted">${esc(a.ipv4 || "")}</span>
+            ${a.vlan ? `<span class="tag">VLAN ${esc(a.vlan)}</span>` : ""}
+          </div>
+          <div class="ad-port">${where}</div>
+          <div class="ad-act">
+            ${a.port ? `<button class="btn ghost sm" data-unplug="${esc(a.id)}">Loskoppelen</button>`
+                     : `<button class="btn ghost sm" data-plug="${esc(a.id)}">${ICON.link} Aansluiten</button>`}
+            ${a.source === "rmm" ? "" : `<button class="btn ghost sm" data-del-ad="${esc(a.id)}">${ICON.trash}</button>`}
+          </div>
+          <div class="ad-form" id="plug-${esc(a.id)}"></div>
+        </div>`;
+      }).join("") : `<div class="muted" style="padding:14px 16px">
+          Nog geen netwerkadapters.${item.source === "rmm"
+            ? " Van een machine met een agent komen ze uit de RMM."
+            : ""}</div>`;
+
+      slot.innerHTML = `<div class="panel">
+          <div class="panel-head"><h2>Netwerkadapters</h2>
+            <span class="sub">Met het MAC-adres en de switchpoort waar ze aan hangen</span>
+            <div class="spacer"></div>
+            <button class="btn ghost sm" id="ad-add">${ICON.plus} Adapter</button></div>
+          ${rows}
+          <div id="ad-new"></div>
+        </div>`;
+
+      slot.querySelectorAll("[data-goto]").forEach((a) => {
+        a.onclick = () => go(`#/klant/${org.id}/item/${a.dataset.goto}`);
+      });
+
+      slot.querySelectorAll("[data-plug]").forEach((b) => {
+        b.onclick = () => {
+          const id = b.dataset.plug;
+          const box = slot.querySelector(`#plug-${CSS.escape(id)}`);
+          if (box.dataset.open === "1") { box.dataset.open = "0"; box.innerHTML = ""; return; }
+          box.dataset.open = "1";
+          if (!switches.length) {
+            box.innerHTML = `<div class="hint">Er is nog geen switch bij deze klant.
+              Maak er een aan onder <b>Configuraties</b>, met het aantal poorten erbij.</div>`;
+            return;
+          }
+          box.innerHTML = `<div class="plug-row">
+              <select class="inp" id="plug-switch">${switches.map((s) =>
+                `<option value="${esc(s.id)}">${esc(s.name)}${s.fields.ports ? ` (${esc(s.fields.ports)} poorten)` : ""}</option>`).join("")}</select>
+              <input class="inp" id="plug-port" type="number" min="1" placeholder="poort" style="max-width:110px" />
+              <input class="inp" id="plug-label" placeholder="label (optioneel)" style="max-width:180px" />
+              <button class="btn sm" id="plug-go">Aansluiten</button>
+            </div>`;
+          box.querySelector("#plug-port").focus();
+          const attach = async () => {
+            try {
+              await api(`/api/adapters/${id}/connect`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ switch_id: box.querySelector("#plug-switch").value,
+                                       port: box.querySelector("#plug-port").value,
+                                       label: box.querySelector("#plug-label").value }),
+              });
+              item = await api(`/api/items/${item.id}`);
+              toast("Aangesloten");
+              draw();
+            } catch (e) { toast(e.message); }
+          };
+          box.querySelector("#plug-go").onclick = attach;
+          box.querySelector("#plug-port").addEventListener("keydown",
+            (e) => { if (e.key === "Enter") attach(); });
+        };
+      });
+
+      slot.querySelectorAll("[data-unplug]").forEach((b) => {
+        b.onclick = async () => {
+          try {
+            await api(`/api/adapters/${b.dataset.unplug}/disconnect`, { method: "POST" });
+            item = await api(`/api/items/${item.id}`);
+            toast("Losgekoppeld");
+            draw();
+          } catch (e) { toast(e.message); }
+        };
+      });
+
+      slot.querySelectorAll("[data-del-ad]").forEach((b) => {
+        b.onclick = async () => {
+          try {
+            await api(`/api/adapters/${b.dataset.delAd}`, { method: "DELETE" });
+            item = await api(`/api/items/${item.id}`);
+            draw();
+          } catch (e) { toast(e.message); }
+        };
+      });
+
+      slot.querySelector("#ad-add").onclick = () => {
+        const box = slot.querySelector("#ad-new");
+        if (box.dataset.open === "1") { box.dataset.open = "0"; box.innerHTML = ""; return; }
+        box.dataset.open = "1";
+        box.innerHTML = `<div class="plug-row">
+            <input class="inp" id="ad-name" placeholder="Naam, bijv. LAN" style="max-width:200px" />
+            <input class="inp mono" id="ad-mac" placeholder="MAC-adres" style="max-width:220px" />
+            <input class="inp mono" id="ad-ip" placeholder="IPv4" style="max-width:170px" />
+            <input class="inp" id="ad-vlan" placeholder="VLAN" style="max-width:110px" />
+            <button class="btn sm" id="ad-save">Toevoegen</button>
+          </div>`;
+        box.querySelector("#ad-name").focus();
+        box.querySelector("#ad-save").onclick = async () => {
+          try {
+            await api(`/api/items/${item.id}/adapters`, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ name: box.querySelector("#ad-name").value,
+                                     mac: box.querySelector("#ad-mac").value,
+                                     ipv4: box.querySelector("#ad-ip").value,
+                                     vlan: box.querySelector("#ad-vlan").value }),
+            });
+            item = await api(`/api/items/${item.id}`);
+            forget(org.id);
+            draw();
+          } catch (e) { toast(e.message); }
+        };
+      };
+    }
+
+    /* A switch's patch list. The whole point is the empty rows: you come here
+       to find a free port as often as to look one up. */
+    async function drawPorts() {
+      const slot = host.querySelector("#ports");
+      if (!slot) return;
+      // Only a switch has a patch list. The server sends the field at all only
+      // for one, so anything else leaves the panel out entirely rather than
+      // inviting a computer to say how many ports it has.
+      if (!Array.isArray(item.ports)) { slot.innerHTML = ""; return; }
+      const ports = item.ports;
+      if (!ports.length) {
+        slot.innerHTML = `<div class="panel"><div class="panel-head"><h2>Poorten</h2></div>
+          <div class="muted" style="padding:14px 16px">Vul bij <b>Aantal poorten</b> in hoeveel
+            poorten deze switch heeft, dan verschijnt hier de patchlijst.</div></div>`;
+        return;
+      }
+      const free = ports.filter((p) => !p.adapter && !p.beyond).length;
+      slot.innerHTML = `<div class="panel">
+          <div class="panel-head"><h2>Poorten</h2>
+            <span class="sub">${free} van ${ports.filter((p) => !p.beyond).length} vrij</span></div>
+          <table class="grid ports"><thead><tr><th>Poort</th><th>Wat erop zit</th>
+            <th>Label</th><th>VLAN</th><th></th></tr></thead><tbody>
+            ${ports.map((p) => `<tr class="${p.adapter ? "" : "free"}">
+              <td class="pnum">${p.number}${p.beyond ? ' <span class="tag warn">buiten bereik</span>' : ""}</td>
+              <td>${p.adapter
+                ? `<a data-goto="${esc(p.adapter.item_id)}">${esc(p.adapter.item_name)}</a>
+                   <span class="muted">${esc(p.adapter.name || "")}</span>
+                   <span class="mono ad-mac">${esc(p.adapter.mac || "")}</span>`
+                : '<span class="muted">vrij</span>'}</td>
+              <td>${esc(p.label || "")}</td>
+              <td>${p.vlan ? esc(p.vlan) : ""}</td>
+              <td class="right">${p.adapter
+                ? `<button class="btn ghost sm" data-clear="${p.number}">Leegmaken</button>` : ""}</td>
+            </tr>`).join("")}
+          </tbody></table></div>`;
+      slot.querySelectorAll("[data-goto]").forEach((a) => {
+        a.onclick = () => go(`#/klant/${org.id}/item/${a.dataset.goto}`);
+      });
+      slot.querySelectorAll("[data-clear]").forEach((b) => {
+        b.onclick = async () => {
+          try {
+            await api(`/api/items/${item.id}/ports/${b.dataset.clear}`, {
+              method: "PATCH", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ adapter_id: null }),
+            });
+            item = await api(`/api/items/${item.id}`);
+            toast("Poort leeggemaakt");
+            draw();
+          } catch (e) { toast(e.message); }
+        };
+      });
     }
 
     /* Related items are stored once and shown from both sides — you link a
@@ -446,6 +642,15 @@ window.DocItems = function (ctx) {
       };
     }
 
+    /* Only a change to the item's own fields can be put back by writing the
+       old value. A cable moved to another port is not one of those, and a
+       button that would do nothing is worse than no button. */
+    function revertible(revision) {
+      if (revision.action !== "updated" || !revision.changes.length) return false;
+      const own = fieldsOf(item.kind).map((f) => f.key);
+      return revision.changes.every((c) => c.key === "naam" || own.includes(c.key));
+    }
+
     async function drawHistory() {
       const slot = host.querySelector("#history");
       const revisions = await api(`/api/items/${item.id}/revisions`).catch(() => []);
@@ -460,7 +665,7 @@ window.DocItems = function (ctx) {
               <b>${esc(r.user_email || "de RMM")}</b>
               <span class="muted">${esc(word[r.action] || r.action)}</span>
               <span class="muted">${when(r.at)}</span>
-              ${r.changes.length && r.action === "updated"
+              ${revertible(r)
                 ? `<button class="btn ghost sm" data-revert="${r.id}">${ICON.restart} Terugdraaien</button>`
                 : ""}
             </div>
