@@ -146,12 +146,17 @@
   }
 
   // ---- pieces ----
-  function orgMark(name, big) {
+  /* A customer's mark, with the RMM's own shield on it when the two are
+     linked. On a list of twenty customers the one that is *not* linked is what
+     you are looking for, and a badge is quicker to scan than a line of text. */
+  function orgMark(name, big, linked) {
     const initials = name.trim().split(/\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase();
     // A stable colour per customer, so the same one always looks the same.
     let h = 0;
     for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
-    return `<span class="oc-mark" style="background:hsl(${h} 55% 45%)${big ? ";width:46px;height:46px;font-size:17px" : ""}">${esc(initials)}</span>`;
+    const badge = linked
+      ? `<span class="oc-rmm" title="Gekoppeld aan de Leuffen RMM">${ICON.shield}</span>` : "";
+    return `<span class="oc-mark" style="background:hsl(${h} 55% 45%)${big ? ";width:46px;height:46px;font-size:17px" : ""}">${esc(initials)}${badge}</span>`;
   }
 
   function renderNav() {
@@ -201,9 +206,11 @@
     }
     return note + link + add + `<div class="cards">${state.orgs.map((o) => `
       <div class="orgcard" data-org="${esc(o.id)}">
-        <div class="oc-head">${orgMark(o.name)}
+        <div class="oc-head">${orgMark(o.name, false, o.rmm_org_id)}
           <div><h3>${esc(o.name)}</h3>
-            <small>${o.rmm_org_id ? "gekoppeld aan de RMM" : "alleen in LeuffenDoc"}</small></div>
+            <small>${o.rmm_org_id
+              ? `<span class="oc-link">${ICON.shield} gekoppeld aan de RMM</span>`
+              : "alleen in LeuffenDoc"}</small></div>
           <span class="oc-arrow">${ICON.chevR}</span>
         </div>
       </div>`).join("")}</div>`;
@@ -234,10 +241,11 @@
         </div></div></div>` : "";
     return dueBlock + `<div class="panel" style="padding:20px;margin-bottom:16px">
         <div class="org-head">
-          <span class="mark" style="background:hsl(${h} 55% 45%)">${esc(initials)}</span>
+          <span class="mark" style="background:hsl(${h} 55% 45%)">${esc(initials)}
+            ${o.rmm_org_id ? `<span class="oc-rmm" title="Gekoppeld aan de Leuffen RMM">${ICON.shield}</span>` : ""}</span>
           <div><h3>${esc(o.name)}</h3>
             <small>${o.rmm_org_id
-              ? `gekoppeld aan de RMM (<span class="mono">${esc(o.rmm_org_id)}</span>)`
+              ? `<span class="oc-link">${ICON.shield} gekoppeld aan de RMM (<span class="mono">${esc(o.rmm_org_id)}</span>)</span>`
               : "nog niet gekoppeld aan een organisatie in de RMM"}</small></div>
         </div></div>
       <div class="cards">

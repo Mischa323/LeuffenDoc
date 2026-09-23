@@ -195,6 +195,17 @@
     .ad-edit-grid .ad-patch { grid-column: 1 / -1; }
     tr.port-edit.removing td { opacity: .5; text-decoration: line-through; }
     table.grid.ports .inp { padding: 5px 9px; font-size: 12.5px; }
+
+    /* ---- a customer that is linked to the RMM ---- */
+    .oc-mark, .org-head .mark { position: relative; overflow: visible; }
+    .oc-rmm { position: absolute; right: -5px; bottom: -5px; width: 18px; height: 18px;
+              border-radius: 99px; background: var(--accent); color: #fff; display: grid;
+              place-items: center; border: 2px solid var(--surface); }
+    .org-head .mark .oc-rmm { width: 21px; height: 21px; }
+    .oc-rmm svg { width: 10px; height: 10px; }
+    .org-head .mark .oc-rmm svg { width: 12px; height: 12px; }
+    .oc-link { display: inline-flex; align-items: center; gap: 5px; }
+    .oc-link svg { width: 12px; height: 12px; color: var(--accent); }
   </style>
 </head>
 <body>

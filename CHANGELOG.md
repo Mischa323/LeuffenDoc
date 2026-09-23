@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **The customer list shows which customers the RMM knows.** A linked customer carries the RMM's own shield on its mark, and says so in words underneath; one that exists only here says that instead. On a list of twenty customers the one that is *not* linked is usually what you are looking for, and a badge is quicker to scan than a line of text. The customer's own page carries the same mark.
 - **Several addresses and numbers per contact.** One phone number per person is a fiction: there is a desk number, a mobile, and the one that is actually answered. A contact now takes as many e-mail addresses and phone numbers as it needs, each with what it is for (*Werk*, *Mobiel*, *Facturatie*), shown on their own lines rather than run together.
 - **Icons on the lines you scan for.** A memory module next to the memory, a disk next to the disks, a processor, a telephone, an envelope, a globe for an address. Not on every field — an icon beside everything is the same as none — but on the hardware, the ways to reach someone and the network, which is what you are looking for when you are not reading.
 
