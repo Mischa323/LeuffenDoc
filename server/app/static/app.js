@@ -52,8 +52,9 @@
       example: "Beheerder firewall",
       empty: "Wachtwoorden worden versleuteld opgeslagen en zijn te koppelen aan het apparaat of de lijn waar ze bij horen. Tonen en kopiëren komt altijd in het logboek." },
     { id: "documenten", label: "Documenten", icon: "file", title: "Documenten",
-      sub: "Vrije pagina's van deze klant",
-      soon: "Voor wat niet in velden past: procedures, uitleg, hoe je iets herstart. Te koppelen aan de apparatuur waar ze over gaan." },
+      sub: "Procedures en uitleg die niet in velden past", kinds: ["document"],
+      example: "Herstart van de terminalserver",
+      empty: "Voor wat niet in velden past: procedures, uitleg, hoe je iets herstart om drie uur ’s nachts. Te koppelen aan de apparatuur waar ze over gaan." },
   ];
 
   async function api(path, opts) {
@@ -118,6 +119,13 @@
 
   function route() {
     const parts = location.hash.split("?")[0].replace(/^#\/?/, "").split("/").filter(Boolean);
+    if (parts[0] === "zoeken") {
+      state.org = null;
+      state.item = null;
+      state.tab = "zoeken";
+      render();
+      return;
+    }
     if (parts[0] === "klant" && parts[1]) {
       state.org = state.orgs.find((o) => o.id === parts[1]) || null;
       // `.../item/<id>` opens one thing; everything else is a section.
@@ -304,6 +312,7 @@
 
   // ---- render ----
   async function render() {
+    if (state.tab === "zoeken") { await searchView(); return; }
     const tab = tabsHere().find((t) => t.id === state.tab) || tabsHere()[0];
     state.tab = tab.id;
     $("page-title").textContent = state.org && tab.id === "overzicht" ? state.org.name : tab.title;
@@ -374,6 +383,91 @@
     });
     wireNewOrg();
     showRmmLink();
+  }
+
+  /* Results span customers, so each one says whose it is: the usual question is
+     the other way round — you have a serial number or a MAC in your hand and
+     want to know where it belongs. */
+  function query() {
+    return new URLSearchParams(location.hash.split("?")[1] || "").get("q") || "";
+  }
+
+  function mark(text, needle) {
+    const at = text.toLowerCase().indexOf(needle.toLowerCase());
+    if (at < 0 || !needle) return esc(text);
+    return esc(text.slice(0, at)) + "<mark>" + esc(text.slice(at, at + needle.length))
+      + "</mark>" + esc(text.slice(at + needle.length));
+  }
+
+  async function searchView() {
+    const q = query();
+    $("page-title").textContent = "Zoeken";
+    $("page-sub").textContent = q ? `Resultaten voor “${q}”` : "Zoek over al je klanten heen";
+    $("page-actions").innerHTML = "";
+    crumbs();
+    renderNav();
+    $("search-input").value = q;
+
+    if (!q) { $("view").innerHTML = ""; return; }
+    $("view").innerHTML = `<div class="panel"><div class="empty">Zoeken…</div></div>`;
+    let found;
+    try { found = await api("/api/search?q=" + encodeURIComponent(q)); }
+    catch (e) { $("view").innerHTML = `<div class="callout warn"><div class="ic">${ICON.alert}</div>
+      <div><div class="ct">Zoeken lukte niet</div><div class="cd">${esc(e.message)}</div></div></div>`; return; }
+
+    if (found.short) {
+      $("view").innerHTML = `<div class="panel"><div class="empty">
+        <div>Typ er nog een letter bij</div>
+        <div style="font-size:12.5px;margin-top:6px">Vanaf twee tekens wordt er gezocht.</div>
+      </div></div>`;
+      return;
+    }
+    if (!found.results.length) {
+      $("view").innerHTML = `<div class="panel"><div class="empty"><div class="big">${ICON.search}</div>
+        <div>Niets gevonden voor “${esc(q)}”</div>
+        <div style="font-size:12.5px;margin-top:6px">Gezocht is op naam, op alle ingevulde velden,
+          op wat de RMM weet, en op de MAC- en IP-adressen van netwerkadapters.</div>
+      </div></div>`;
+      return;
+    }
+    const more = found.total > found.results.length
+      ? `<div class="muted" style="padding:12px 18px">${found.total} gevonden, de eerste ${found.results.length} staan hier.</div>`
+      : "";
+    $("view").innerHTML = `<div class="panel">${found.results.map((r) => `
+        <div class="hit" data-org="${esc(r.org_id)}" data-item="${esc(r.id)}">
+          <div class="hit-top">${ICON[(KINDS[r.kind] || {}).icon || "file"]}
+            <span class="hit-name">${mark(r.name, q)}</span>
+            <span class="muted">${esc((KINDS[r.kind] || {}).label || r.kind)}</span>
+            ${r.archived ? '<span class="tag">afgevoerd</span>' : ""}
+            <span class="hit-org">${esc(r.org_name)}</span></div>
+          <div class="hit-why">${r.hits.map((h) =>
+            `<span><b>${esc(h.where)}:</b> ${mark(h.text, q)}</span>`).join("")}</div>
+        </div>`).join("")}${more}</div>`;
+    $("view").querySelectorAll(".hit").forEach((hit) => {
+      hit.onclick = () => go(`#/klant/${hit.dataset.org}/item/${hit.dataset.item}`);
+    });
+  }
+
+  let KINDS = {};
+
+  function wireSearch() {
+    const field = $("search-input");
+    $("search-ico").innerHTML = ICON.search;
+    const run = () => {
+      const q = field.value.trim();
+      go(q ? `#/zoeken?q=${encodeURIComponent(q)}` : "#/klanten");
+    };
+    field.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") run();
+      if (e.key === "Escape") { field.value = ""; field.blur(); }
+    });
+    document.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        field.focus();
+        field.select();
+      }
+    });
   }
 
   // The customer list is where a customer that should have come from the RMM is
@@ -467,6 +561,8 @@
     initTheme();
     state.me = await api("/api/me");
     state.orgs = await api("/api/orgs");
+    KINDS = await Items.kinds();
+    wireSearch();
     const name = state.me.display_name || state.me.email.split("@")[0];
     $("user-name").textContent = name;
     $("user-email").textContent = state.me.email;

@@ -273,6 +273,37 @@ PASSWORD = {
     ],
 }
 
+# --------------------------------------------------------------------------- #
+# Free-form documents
+#
+# For what does not fit in fields: a procedure, an explanation, how to restart
+# something at three in the morning. It is an item like the rest, so it can be
+# hung on the machine it is about and turns up in the same search.
+# --------------------------------------------------------------------------- #
+DOCUMENT = {
+    "label": "Document",
+    "plural": "Documenten",
+    "icon": "file",
+    "family": "document",
+    "sub": "Procedures en uitleg die niet in velden past",
+    "backref": "Wat hiernaar verwijst",
+    # What a list shows at a glance.
+    "columns": ["category", "review_by"],
+    "groups": [
+        {"key": "wat", "label": "Waarover", "fields": [
+            _f("category", "Soort", "select",
+               options=["Procedure", "Uitleg", "Noodprocedure", "Afspraken", "Overig"]),
+            _f("summary", "Waar het over gaat",
+               hint="Één zin, zodat de lijst leesbaar blijft."),
+            _f("review_by", "Nakijken vóór", "date", expiry=True,
+               hint="Documentatie die niemand meer nakijkt gaat stilletjes liegen."),
+        ]},
+        {"key": "tekst", "label": "Tekst", "fields": [
+            _f("body", "Inhoud", "textarea", long=True),
+        ]},
+    ],
+}
+
 KINDS: dict[str, dict] = {
     "computer": COMPUTER,
     "network": NETWORK,
@@ -281,6 +312,7 @@ KINDS: dict[str, dict] = {
     "location": LOCATION,
     "contact": CONTACT,
     "password": PASSWORD,
+    "document": DOCUMENT,
 }
 
 # Equipment carries network adapters; an internet connection or a contact does
@@ -343,8 +375,14 @@ def clean(name: str, values: dict) -> dict:
                 except ValueError:
                     continue
         else:
-            text = str(value).strip()
-            if text:
+            text = str(value)
+            # A long text keeps the whitespace it was written with: the
+            # indentation of a command in a procedure is part of the procedure.
+            # Everything else is trimmed, since a trailing space in a name is
+            # never meant.
+            if not spec.get("long"):
+                text = text.strip()
+            if text.strip():
                 out[key] = text
     return out
 

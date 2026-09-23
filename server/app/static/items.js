@@ -94,7 +94,8 @@ window.DocItems = function (ctx) {
               <span class="tag">uit de RMM</span></div>`;
     }
     if (field.type === "textarea") {
-      return `<textarea class="inp" id="${id}" data-key="${field.key}" rows="3">${esc(value)}</textarea>`;
+      return `<textarea class="inp${field.long ? " longtext-input" : ""}" id="${id}"
+        data-key="${field.key}" rows="${field.long ? 20 : 3}">${esc(value)}</textarea>`;
     }
     if (field.type === "select") {
       // Something written before an option was retired must not disappear the
@@ -152,6 +153,15 @@ window.DocItems = function (ctx) {
     const bytes = new Uint32Array(length);
     crypto.getRandomValues(bytes);
     return Array.from(bytes, (n) => alphabet[n % alphabet.length]).join("");
+  }
+
+  // Long values (a document's text) are cut for the history, which is about
+  // what changed and not about reading the whole thing again.
+  function short(value, limit = 90) {
+    const text = String(value);
+    return text.length <= limit
+      ? text
+      : `${text.slice(0, limit).trimEnd()}… (${text.length} tekens)`;
   }
 
   // ---- list ----
@@ -334,7 +344,10 @@ window.DocItems = function (ctx) {
       </div>`;
 
     const readBlocks = () => spec.groups.map((group) => {
-      const rows = group.fields.map((f) => {
+      // A page of text does not belong in a label-and-value grid; it gets the
+      // width of the panel and keeps the line breaks it was written with.
+      const long = group.fields.filter((f) => f.long && display(item, f, all));
+      const rows = group.fields.filter((f) => !f.long).map((f) => {
         const text = display(item, f, all);
         if (!text) return "";
         const ref = f.type === "ref" && item.fields[f.key]
@@ -342,10 +355,11 @@ window.DocItems = function (ctx) {
         return `<div class="dt">${esc(f.label)}${f.rmm ? ' <span class="tag sm">RMM</span>' : ""}</div>
                 <div class="dd">${ref}</div>`;
       }).join("");
-      if (!rows) return "";
+      if (!rows && !long.length) return "";
       return `<div class="panel">
           <div class="panel-head"><h2>${esc(group.label)}</h2></div>
-          <div class="deflist">${rows}</div>
+          ${rows ? `<div class="deflist">${rows}</div>` : ""}
+          ${long.map((f) => `<div class="longtext">${esc(display(item, f, all))}</div>`).join("")}
         </div>`;
     }).join("") || `<div class="panel"><div class="empty">
         <div>Nog niets ingevuld</div>
@@ -846,9 +860,9 @@ window.DocItems = function (ctx) {
             </div>
             ${r.changes.map((c) => `<div class="rev-change">
               <span class="rc-field">${esc(c.label)}</span>
-              <span class="rc-from">${c.from ? esc(c.from) : "leeg"}</span>
+              <span class="rc-from">${c.from ? esc(short(c.from)) : "leeg"}</span>
               <span class="rc-arrow">→</span>
-              <span class="rc-to">${c.to ? esc(c.to) : "leeg"}</span>
+              <span class="rc-to">${c.to ? esc(short(c.to)) : "leeg"}</span>
             </div>`).join("")}
           </div>`).join("")}
         </div>`;

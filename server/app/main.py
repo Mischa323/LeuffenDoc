@@ -873,6 +873,75 @@ def read_secret(item_id: str, request: Request,
 
 
 # --------------------------------------------------------------------------- #
+# Search
+#
+# Across every customer you may see, because the question is usually the other
+# way round: you have a serial number, an IP or a MAC address in front of you
+# and you want to know *whose* it is. Passwords are searchable by name and by
+# what they are for -- never by their contents, which the server does not read
+# for this and could not hand over here anyway.
+# --------------------------------------------------------------------------- #
+SEARCH_LIMIT = 60
+
+
+def _snippet(text: str, needle: str, width: int = 90) -> str:
+    """The matching bit with a little around it, so a hit explains itself."""
+    at = text.lower().find(needle)
+    if at < 0:
+        return text[:width]
+    start = max(0, at - width // 3)
+    end = min(len(text), at + len(needle) + width)
+    return ("…" if start else "") + text[start:end].strip() + ("…" if end < len(text) else "")
+
+
+@app.get("/api/search")
+def search(q: str = "", user: dict = Depends(auth.current_user)):
+    needle = (q or "").strip().lower()
+    if len(needle) < 2:
+        return {"query": q, "results": [], "short": True}
+
+    orgs = database.list_orgs() if user.get("is_admin") else database.user_orgs(user["email"])
+    results = []
+    for org in orgs:
+        for item in database.list_items(org["id"], include_archived=True):
+            fields = schema.fields_of(item["kind"])
+            hits = []
+            if needle in item["name"].lower():
+                hits.append({"where": "Naam", "text": item["name"]})
+            for key, value in item["fields"].items():
+                text = str(value)
+                if needle in text.lower():
+                    hits.append({"where": schema.label_of(item["kind"], key),
+                                 "text": _snippet(text, needle)})
+            # What the RMM knows counts too: a serial number is exactly the kind
+            # of thing you arrive with.
+            for key, value in (item["rmm"] or {}).items():
+                spec = next((f for f in fields.values() if f.get("rmm") == key), None)
+                if spec and isinstance(value, str) and needle in value.lower():
+                    hits.append({"where": spec["label"], "text": value})
+            if item["kind"] in schema.ADAPTER_KINDS:
+                for adapter in database.list_adapters(item["id"]):
+                    for key in ("mac", "ipv4", "ipv6", "name"):
+                        value = adapter.get(key) or ""
+                        if needle in value.lower():
+                            hits.append({"where": f"{adapter['name'] or 'Adapter'} "
+                                                  f"({database.ADAPTER_FIELDS[key]})",
+                                         "text": value})
+            if hits:
+                results.append({
+                    "id": item["id"], "kind": item["kind"], "name": item["name"],
+                    "archived": item["archived"],
+                    "org_id": org["id"], "org_name": org["name"],
+                    "hits": hits[:3],
+                })
+    # A name match is what you meant more often than a match halfway down a
+    # document, so those come first.
+    results.sort(key=lambda r: (r["hits"][0]["where"] != "Naam", r["name"].lower()))
+    return {"query": q, "results": results[:SEARCH_LIMIT],
+            "total": len(results), "short": False}
+
+
+# --------------------------------------------------------------------------- #
 # Pages
 # --------------------------------------------------------------------------- #
 @app.get("/")
