@@ -25,6 +25,7 @@ explicit environment variable always wins over one of those.
 | `DOC_SYNC_MINUTES` | How often to pull users and customers from the RMM. Default 15. |
 | `DOC_M365_TENANT` / `DOC_M365_CLIENT_ID` / `DOC_M365_CLIENT_SECRET` | Microsoft 365 sign-in, the fallback for when the RMM is unreachable. |
 | `DOC_BOOTSTRAP_ADMIN` | Addresses (comma separated) that are always administrators, whatever the database says — how a fresh install is set up, and the way back in if nobody is left with the rights. |
+| `DOC_SECRET_KEY` | The master key of the password vault. Set it to a 32-byte key (base64 or hex) or a passphrase, and **keep it somewhere other than the database backup** — a backup that holds both the vault and its key protects nothing. Left unset, a key is generated and stored in the database, and the **Wachtwoorden** page says so. Change it and the existing passwords can no longer be opened, so set it before you start filling the vault. |
 | `DOC_SESSION_SECRET` | Signs session cookies. Generated into the data volume on first boot if unset. |
 | `DOC_SECURE_COOKIES` | `1` by default. Only set to `0` for local HTTP development. |
 | `DOC_TRUST_PROXY` | `1` behind a reverse proxy, so the audit log records the visitor rather than the proxy. `0` if the container is reachable directly. |

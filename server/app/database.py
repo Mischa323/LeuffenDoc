@@ -176,6 +176,21 @@ CREATE TABLE IF NOT EXISTS revisions (
     FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_rev_item ON revisions(item_id, at DESC);
+
+-- The encrypted half of a password. Kept out of the item itself on purpose:
+-- an item's fields are handed out by every list, and they land in the history
+-- as "from this to that". A secret must never travel that way.
+CREATE TABLE IF NOT EXISTS secrets (
+    item_id     TEXT PRIMARY KEY,
+    wrapped_key BLOB NOT NULL,
+    wrap_nonce  BLOB NOT NULL,
+    nonce       BLOB NOT NULL,
+    ciphertext  BLOB NOT NULL,
+    key_version INTEGER NOT NULL DEFAULT 1,
+    updated_at  REAL NOT NULL,
+    updated_by  TEXT,
+    FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+);
 """
 
 
@@ -588,6 +603,41 @@ def relations_of(item_id: str) -> list:
         "FROM relations r JOIN items i ON i.id = CASE WHEN r.a_id=? THEN r.b_id ELSE r.a_id END "
         "WHERE r.a_id=? OR r.b_id=? ORDER BY i.kind, i.name COLLATE NOCASE",
         (item_id, item_id, item_id))
+
+
+# --------------------------------------------------------------------------- #
+# Secrets
+#
+# Only ever read one at a time and by name: there is no "list every password",
+# because nothing in the interface needs one and its existence would be the
+# most useful call in the place for anyone who should not have it.
+# --------------------------------------------------------------------------- #
+def put_secret(item_id: str, record: dict, by: str | None) -> None:
+    with write() as conn:
+        conn.execute(
+            "INSERT INTO secrets (item_id, wrapped_key, wrap_nonce, nonce, ciphertext, "
+            "key_version, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(item_id) DO UPDATE SET wrapped_key=excluded.wrapped_key, "
+            "wrap_nonce=excluded.wrap_nonce, nonce=excluded.nonce, "
+            "ciphertext=excluded.ciphertext, key_version=excluded.key_version, "
+            "updated_at=excluded.updated_at, updated_by=excluded.updated_by",
+            (item_id, record["wrapped_key"], record["wrap_nonce"], record["nonce"],
+             record["ciphertext"], record["key_version"], record["updated_at"], by))
+
+
+def get_secret(item_id: str) -> dict | None:
+    return row("SELECT * FROM secrets WHERE item_id=?", (item_id,))
+
+
+def secret_state(item_id: str) -> dict:
+    r = row("SELECT updated_at, updated_by FROM secrets WHERE item_id=?", (item_id,))
+    return {"has_secret": bool(r), "secret_updated_at": r["updated_at"] if r else None,
+            "secret_updated_by": r["updated_by"] if r else None}
+
+
+def drop_secret(item_id: str) -> None:
+    with write() as conn:
+        conn.execute("DELETE FROM secrets WHERE item_id=?", (item_id,))
 
 
 # --------------------------------------------------------------------------- #

@@ -21,7 +21,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, database, m365, rmm, schema
+from . import auth, database, m365, rmm, schema, vault
 
 log = logging.getLogger("leuffendoc")
 
@@ -396,6 +396,8 @@ def _decorate(item: dict) -> dict:
     item = dict(item)
     item["relations"] = database.relations_of(item["id"])
     item["referred_by"] = _referred_by(item)
+    if item["kind"] == "password":
+        item.update(database.secret_state(item["id"]))
     if item["kind"] in schema.ADAPTER_KINDS:
         item["adapters"] = database.list_adapters(item["id"])
     if has_ports(item):
@@ -439,6 +441,17 @@ async def create_org_item(org_id: str, request: Request,
     item = database.create_item(org_id, kind, name,
                                 schema.clean(kind, body.get("fields") or {}),
                                 by=user["email"], label=_labeller(kind))
+    if kind == "password" and body.get("password"):
+        database.put_secret(item["id"], vault.seal(body["password"]), by=user["email"])
+        # The history should say a password was set here, the same as when one
+        # is changed later -- otherwise the first one is the only change to a
+        # vault entry that leaves no trace.
+        database.record(item["id"], "updated",
+                        [{"key": "secret", "label": "Wachtwoord", "from": "", "to": "ingesteld"}],
+                        by=user["email"])
+        database.audit("secret.write", user_email=user["email"], org_id=org_id,
+                       target=name, ip=auth.client_ip(request))
+        item = database.get_item(item["id"])
     database.audit("item.create", user_email=user["email"], org_id=org_id,
                    target=name, detail=schema.KINDS[kind]["label"],
                    ip=auth.client_ip(request))
@@ -787,6 +800,76 @@ async def edit_port(item_id: str, number: int, request: Request,
     database.set_port(item_id, number, label=body.get("label"), vlan=body.get("vlan"),
                       clear_adapter=clear, by=user["email"])
     return database.ports_of(item_id, port_count(item))
+
+
+# --------------------------------------------------------------------------- #
+# The vault
+#
+# A password is an item like any other -- same history, same access, same links
+# -- except for the password itself, which lives encrypted in its own table and
+# leaves it one at a time, on purpose, with a line in the log each time.
+# --------------------------------------------------------------------------- #
+def _password_item(user: dict, item_id: str) -> tuple:
+    item, org = _item_for(user, item_id)
+    if item["kind"] != "password":
+        raise HTTPException(status_code=400, detail="Dit item is geen wachtwoord")
+    return item, org
+
+
+@app.get("/api/vault")
+def vault_state(user: dict = Depends(auth.current_user)):
+    """Where the master key lives. An operator should know whether a backup of
+    the database also contains the key that opens it."""
+    auth.require_admin(user)
+    return vault.state()
+
+
+@app.put("/api/items/{item_id}/secret")
+async def set_secret(item_id: str, request: Request,
+                     user: dict = Depends(auth.current_user)):
+    item, _ = _password_item(user, item_id)
+    body = await request.json()
+    password = body.get("password") or ""
+    if not password:
+        raise HTTPException(status_code=400, detail="Er is geen wachtwoord opgegeven")
+    had = database.secret_state(item_id)["has_secret"]
+    database.put_secret(item_id, vault.seal(password), by=user["email"])
+    # The history says that it changed and when -- never what it was, and not
+    # even how long it is, which is more than a bystander should learn.
+    database.record(item_id, "updated",
+                    [{"key": "secret", "label": "Wachtwoord",
+                      "from": "ingesteld" if had else "", "to": "gewijzigd" if had else "ingesteld"}],
+                    by=user["email"])
+    database.audit("secret.write", user_email=user["email"], org_id=item["org_id"],
+                   target=item["name"], ip=auth.client_ip(request))
+    return database.secret_state(item_id)
+
+
+@app.get("/api/items/{item_id}/secret")
+def read_secret(item_id: str, request: Request,
+                user: dict = Depends(auth.current_user)):
+    """Hand over one password, and write down that it happened.
+
+    This is the only way a secret leaves the server, which is what makes the
+    log worth anything: every reading of every password is one line, with who
+    and from where.
+    """
+    item, _ = _password_item(user, item_id)
+    record = database.get_secret(item_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Er staat nog geen wachtwoord in")
+    try:
+        password = vault.unseal(record)
+    except Exception:
+        # A wrong master key, or a record that was tampered with. Both mean the
+        # same thing to the person looking at it: this cannot be opened here.
+        log.warning("could not open the secret of %s", item_id)
+        raise HTTPException(
+            status_code=500,
+            detail="Dit wachtwoord kan niet geopend worden. Klopt DOC_SECRET_KEY nog?")
+    database.audit("secret.read", user_email=user["email"], org_id=item["org_id"],
+                   target=item["name"], ip=auth.client_ip(request))
+    return JSONResponse({"password": password}, headers={"Cache-Control": "no-store"})
 
 
 # --------------------------------------------------------------------------- #

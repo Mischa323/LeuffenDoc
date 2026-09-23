@@ -48,8 +48,9 @@
       sub: "Wie je bij deze klant belt", kinds: ["contact"], example: "Jan de Vries",
       empty: "De mensen bij deze klant, met hun functie en nummer." },
     { id: "wachtwoorden", label: "Wachtwoorden", icon: "key", title: "Wachtwoorden",
-      sub: "Versleutelde kluis van deze klant",
-      soon: "Wachtwoorden worden versleuteld opgeslagen en zijn te koppelen aan een apparaat of een lijn, zodat ze staan waar je ze zoekt. Tonen en kopiëren komt altijd in het logboek." },
+      sub: "Versleutelde kluis van deze klant", kinds: ["password"],
+      example: "Beheerder firewall",
+      empty: "Wachtwoorden worden versleuteld opgeslagen en zijn te koppelen aan het apparaat of de lijn waar ze bij horen. Tonen en kopiëren komt altijd in het logboek." },
     { id: "documenten", label: "Documenten", icon: "file", title: "Documenten",
       sub: "Vrije pagina's van deze klant",
       soon: "Voor wat niet in velden past: procedures, uitleg, hoe je iets herstart. Te koppelen aan de apparatuur waar ze over gaan." },
@@ -343,6 +344,7 @@
           `<button class="btn sm" id="add-item">${ICON.plus} Toevoegen</button>`;
         await Items.listView($("view"), state.org, tab);
         $("add-item").onclick = () => Items.openCreate(state.org, tab, $("view"));
+        if (tab.id === "wachtwoorden" && state.me.is_admin) await showVaultKey();
         return;
       }
 
@@ -411,6 +413,26 @@
         render();
       } catch (e) { alert(e.message); }
     };
+  }
+
+  /* Where the vault's master key lives. An operator who backs up the data
+     volume should know whether that backup also contains the key that opens
+     it — the answer decides what a stolen backup is worth. */
+  async function showVaultKey() {
+    let state_;
+    try { state_ = await api("/api/vault"); } catch (e) { return; }
+    if (state_.from_environment || !state_.in_database) return;
+    const note = document.createElement("div");
+    note.className = "callout warn";
+    note.style.marginBottom = "16px";
+    note.innerHTML = `<div class="ic">${ICON.lock}</div><div>
+      <div class="ct">De sleutel van de kluis staat in de database</div>
+      <div class="cd">Er is er een aangemaakt omdat <code>DOC_SECRET_KEY</code> niet is ingesteld.
+        Dat werkt, maar een back-up van het datavolume bevat dan zowel de kluis als de sleutel.
+        Zet <code>DOC_SECRET_KEY</code> en bewaar hem elders — dat moet gebeuren
+        <b>voordat</b> je de kluis gaat vullen, want met een andere sleutel gaan bestaande
+        wachtwoorden niet meer open.</div></div>`;
+    $("view").prepend(note);
   }
 
   function wireNewOrg() {

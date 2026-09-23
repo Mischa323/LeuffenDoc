@@ -145,6 +145,15 @@ window.DocItems = function (ctx) {
     return fields;
   }
 
+  /* No lookalikes: a password read off a screen and typed into a console
+     should not fail on I versus l. */
+  function generatedPassword(length) {
+    const alphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#%^&*-_=+";
+    const bytes = new Uint32Array(length);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (n) => alphabet[n % alphabet.length]).join("");
+  }
+
   // ---- list ----
   function columnsOf(kind) {
     const wanted = KINDS[kind].columns || [];
@@ -246,12 +255,26 @@ window.DocItems = function (ctx) {
           </div>
         </div>
         <div id="new-fields">${formHtml(kind, null, all, org.id)}</div>
+        ${kind === "password" ? `<div class="panel form-block">
+            <div class="panel-head"><h2>Wachtwoord</h2></div>
+            <div class="form-body"><div class="frow">
+              <div style="display:flex;gap:8px">
+                <input class="inp mono" id="new-secret" type="text" placeholder="Wachtwoord"
+                       autocomplete="new-password" style="flex:1" />
+                <button class="btn ghost" id="new-secret-gen">${ICON.refresh} Genereer</button>
+              </div>
+              <div class="hint">Wordt versleuteld opgeslagen en is daarna alleen met
+                <b>Tonen</b> of <b>Kopiëren</b> op te vragen — beide komen in het logboek.</div>
+            </div></div>
+          </div>` : ""}
         <div class="form-foot">
           <button class="btn ghost" id="new-cancel">Annuleren</button>
           <button class="btn" id="new-save">${ICON.save} Aanmaken</button>
         </div>`;
       const picker = slot.querySelector("#new-kind");
       if (picker) picker.onchange = () => { kind = picker.value; const name = slot.querySelector("#new-name").value; draw(); slot.querySelector("#new-name").value = name; };
+      const gen = slot.querySelector("#new-secret-gen");
+      if (gen) gen.onclick = () => { slot.querySelector("#new-secret").value = generatedPassword(20); };
       slot.querySelector("#new-cancel").onclick = () => { slot.dataset.open = "0"; slot.innerHTML = ""; };
       slot.querySelector("#new-save").onclick = save;
       slot.querySelector("#new-name").focus();
@@ -269,7 +292,10 @@ window.DocItems = function (ctx) {
       try {
         const item = await api(`/api/orgs/${org.id}/items`, {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ kind, name, fields: readForm(slot.querySelector("#new-fields")) }),
+          body: JSON.stringify({
+            kind, name, fields: readForm(slot.querySelector("#new-fields")),
+            password: (slot.querySelector("#new-secret") || {}).value || undefined,
+          }),
         });
         forget(org.id);
         go(`#/klant/${org.id}/item/${item.id}`);
@@ -339,6 +365,7 @@ window.DocItems = function (ctx) {
              <div class="form-foot"><button class="btn ghost" id="edit-cancel">Annuleren</button>
                <button class="btn" id="edit-save">${ICON.save} Opslaan</button></div>`
                    : readBlocks()
+                     + `<div id="secret"></div>`
                      + `<div id="adapters"></div><div id="ports"></div>`
                      + `<div id="referred"></div>`
                      + `<div id="related"></div><div id="history"></div>`);
@@ -354,6 +381,7 @@ window.DocItems = function (ctx) {
         host.querySelectorAll("[data-goto]").forEach((a) => {
           a.onclick = () => go(`#/klant/${org.id}/item/${a.dataset.goto}`);
         });
+        await drawSecret();
         await drawAdapters();
         await drawPorts();
         drawReferredBy();
@@ -398,6 +426,118 @@ window.DocItems = function (ctx) {
       } catch (e) { toast(e.message); btn.disabled = false; }
     }
 
+    /* The password itself. It is not a field: it never travels with the rest
+       of the page, it is asked for one at a time, and every reading is a line
+       in the log — which is the whole reason the log is worth reading. */
+    function setForm(id, buttonText) {
+      return `<div class="plug-row">
+          <input class="inp mono" id="${id}" type="text" autocomplete="new-password"
+                 placeholder="Wachtwoord" style="flex:1;min-width:220px" />
+          <button class="btn ghost sm" id="${id}-gen">${ICON.refresh} Genereer</button>
+          <button class="btn sm" id="${id}-save">${ICON.save} ${buttonText}</button>
+        </div>`;
+    }
+
+    function wireGenerate(root, id) {
+      root.querySelector(`#${id}-gen`).onclick = () => {
+        root.querySelector(`#${id}`).value = generatedPassword(20);
+        root.querySelector(`#${id}`).type = "text";
+      };
+    }
+
+    async function drawSecret() {
+      const slot = host.querySelector("#secret");
+      if (!slot) return;
+      if (item.kind !== "password") { slot.innerHTML = ""; return; }
+      let shown = null;
+      let hideTimer = null;
+
+      const paint = () => {
+        const changed = item.secret_updated_at
+          ? `Laatst gewijzigd ${when(item.secret_updated_at)}${
+              item.secret_updated_by ? ` door ${esc(item.secret_updated_by)}` : ""}`
+          : "";
+        slot.innerHTML = `<div class="panel secret-panel">
+            <div class="panel-head"><h2>Wachtwoord</h2>
+              <span class="sub">${esc(changed)}</span></div>
+            ${item.has_secret ? `
+              <div class="secret-row">
+                <span class="secret-val mono" id="secret-val">${shown ? esc(shown) : "••••••••••••"}</span>
+                <button class="btn ghost sm" id="secret-show">${shown ? ICON.eyeOff : ICON.eye} ${shown ? "Verberg" : "Tonen"}</button>
+                <button class="btn ghost sm" id="secret-copy">${ICON.copy} Kopiëren</button>
+                <button class="btn ghost sm" id="secret-edit">${ICON.pencil} Wijzigen</button>
+              </div>
+              <div class="secret-note">Elke keer dat dit wachtwoord getoond of gekopieerd
+                wordt, komt dat in het logboek te staan.</div>
+              <div id="secret-form"></div>`
+            : `<div class="secret-row">
+                 <span class="muted">Er staat nog geen wachtwoord in.</span></div>
+               <div class="cb-pad">${setForm("secret-new", "Opslaan")}</div>`}
+          </div>`;
+
+        if (!item.has_secret) {
+          wireGenerate(slot, "secret-new");
+          slot.querySelector("#secret-new-save").onclick = () => save("secret-new");
+          return;
+        }
+
+        slot.querySelector("#secret-show").onclick = async () => {
+          if (shown) { shown = null; clearTimeout(hideTimer); paint(); return; }
+          try {
+            shown = (await api(`/api/items/${item.id}/secret`)).password;
+            // Back to dots by itself: a password left on a screen in an office
+            // is the most ordinary way one gets out.
+            hideTimer = setTimeout(() => { shown = null; paint(); }, 30000);
+            paint();
+          } catch (e) { toast(e.message); }
+        };
+
+        slot.querySelector("#secret-copy").onclick = async () => {
+          try {
+            const value = shown || (await api(`/api/items/${item.id}/secret`)).password;
+            await navigator.clipboard.writeText(value);
+            toast("Gekopieerd");
+          } catch (e) {
+            // Without https the browser refuses the clipboard. Show it instead
+            // of failing silently, and say why.
+            try {
+              shown = (await api(`/api/items/${item.id}/secret`)).password;
+              paint();
+              toast("Kopiëren mag niet in deze browser — hier is hij");
+            } catch (inner) { toast(inner.message); }
+          }
+        };
+
+        slot.querySelector("#secret-edit").onclick = () => {
+          const box = slot.querySelector("#secret-form");
+          if (box.dataset.open === "1") { box.dataset.open = "0"; box.innerHTML = ""; return; }
+          box.dataset.open = "1";
+          box.innerHTML = `<div class="cb-pad">${setForm("secret-set", "Vervangen")}</div>`;
+          wireGenerate(box, "secret-set");
+          box.querySelector("#secret-set-save").onclick = () => save("secret-set");
+          box.querySelector("#secret-set").focus();
+        };
+      };
+
+      const save = async (id) => {
+        const field = slot.querySelector(`#${id}`);
+        const value = field.value;
+        if (!value) { toast("Vul eerst een wachtwoord in"); field.focus(); return; }
+        try {
+          await api(`/api/items/${item.id}/secret`, {
+            method: "PUT", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ password: value }),
+          });
+          item = await api(`/api/items/${item.id}`);
+          shown = null;
+          toast("Wachtwoord opgeslagen");
+          draw();
+        } catch (e) { toast(e.message); }
+      };
+
+      paint();
+    }
+
     /* Network adapters, and the port each one is patched into.
 
        You make the connection here, on the machine, because that is where you
@@ -406,7 +546,11 @@ window.DocItems = function (ctx) {
     async function drawAdapters() {
       const slot = host.querySelector("#adapters");
       if (!slot) return;
-      const adapters = item.adapters || [];
+      // Only equipment has network adapters. The server sends the field for
+      // those alone, so a password or a contact leaves the panel out instead
+      // of offering to give a contact person a MAC address.
+      if (!Array.isArray(item.adapters)) { slot.innerHTML = ""; return; }
+      const adapters = item.adapters;
       const switches = all.filter((i) => i.kind === "network" && !i.archived
         && (i.fields.role === "Switch" || Number(i.fields.ports || 0) > 0));
 

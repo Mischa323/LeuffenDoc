@@ -236,6 +236,43 @@ CONTACT = {
     ],
 }
 
+# --------------------------------------------------------------------------- #
+# The vault
+#
+# A password is an item like the rest, so it gets the same history, the same
+# access and -- the point -- the same links: a password sits next to the
+# firewall it belongs to instead of in a separate list nobody opens.
+#
+# Only the password itself is encrypted, and it is not a field. Fields travel
+# through every list and land in the history as "from this to that", which is
+# exactly what a secret must never do.
+# --------------------------------------------------------------------------- #
+PASSWORD = {
+    "label": "Wachtwoord",
+    "plural": "Wachtwoorden",
+    "icon": "key",
+    "family": "kluis",
+    "sub": "Versleuteld bewaard, en gekoppeld aan waar het bij hoort",
+    "backref": "Wat hiernaar verwijst",
+    # What a list shows at a glance.
+    "columns": ["category", "username", "rotate_at"],
+    "groups": [
+        {"key": "wat", "label": "Waarvoor", "fields": [
+            _f("category", "Soort", "select",
+               options=["Beheerder", "Gebruiker", "Dienst", "Netwerk", "Overig"]),
+            _f("username", "Gebruikersnaam"),
+            _f("url", "Adres", hint="Waar je ermee inlogt."),
+        ]},
+        {"key": "beheer", "label": "Beheer", "fields": [
+            _f("rotate_at", "Vervangen vóór", "date", expiry=True,
+               hint="Wanneer dit wachtwoord gewijzigd moet zijn."),
+            _f("notes", "Notities", "textarea",
+               hint="Let op: deze notitie wordt niet versleuteld en staat in de "
+                    "geschiedenis. Zet er geen tweede wachtwoord in."),
+        ]},
+    ],
+}
+
 KINDS: dict[str, dict] = {
     "computer": COMPUTER,
     "network": NETWORK,
@@ -243,6 +280,7 @@ KINDS: dict[str, dict] = {
     "internet": INTERNET,
     "location": LOCATION,
     "contact": CONTACT,
+    "password": PASSWORD,
 }
 
 # Equipment carries network adapters; an internet connection or a contact does
