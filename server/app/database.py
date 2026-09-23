@@ -419,10 +419,18 @@ def count_items(org_id: str) -> dict:
 
 
 def _plain(value) -> str:
+    """One value, as a person reads it in the history."""
     if value is None:
         return ""
     if isinstance(value, bool):
         return "ja" if value else "nee"
+    if isinstance(value, list):
+        # A list of labelled values reads as "Werk: 06-… , Mobiel: 06-…"
+        # rather than as the JSON it is stored as.
+        return ", ".join(
+            f"{e.get('label')}: {e.get('value')}" if isinstance(e, dict) and e.get("label")
+            else str(e.get("value") if isinstance(e, dict) else e)
+            for e in value)
     return str(value)
 
 

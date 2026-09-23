@@ -169,6 +169,32 @@
     .hit-why mark { background: color-mix(in srgb, var(--accent) 30%, transparent);
                     color: inherit; border-radius: 3px; padding: 0 2px; }
     @media (max-width: 900px) { .searchbox { display: none; } }
+
+    /* ---- field icons ---- */
+    .dt-ic, .lb-ic { display: inline-flex; color: var(--text-faint); flex: none; }
+    .dt-ic svg, .lb-ic svg { width: 15px; height: 15px; }
+    .lb-ic { margin-right: 6px; vertical-align: -3px; }
+    .frow > label { display: flex; align-items: center; }
+
+    /* ---- several values under one heading ---- */
+    .lrows { display: grid; gap: 7px; margin-bottom: 8px; }
+    .lrow { display: flex; gap: 7px; }
+    .lrow .lf-label { max-width: 150px; }
+    .lrow .inp { flex: 1; }
+    .lline { display: flex; align-items: center; gap: 9px; padding: 1px 0; }
+
+    /* ---- adapters inside the edit form ---- */
+    .ad-edit { border: 1px solid var(--border); border-radius: var(--r-md); padding: 12px 14px 0;
+               margin-bottom: 12px; background: var(--surface-2); }
+    .ad-edit.removing { opacity: .5; }
+    .ad-edit.removing .ad-edit-grid { text-decoration: line-through; }
+    .ad-edit-head { display: flex; align-items: center; gap: 9px; font-size: 13px;
+                    margin-bottom: 10px; }
+    .ad-edit-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+                    gap: 0 14px; }
+    .ad-edit-grid .ad-patch { grid-column: 1 / -1; }
+    tr.port-edit.removing td { opacity: .5; text-decoration: line-through; }
+    table.grid.ports .inp { padding: 5px 9px; font-size: 12.5px; }
   </style>
 </head>
 <body>

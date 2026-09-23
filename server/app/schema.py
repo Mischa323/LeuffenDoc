@@ -23,8 +23,10 @@ the database, joining the ones below.
 from __future__ import annotations
 
 # Field types the interface knows how to render:
-#   text, textarea, number, date, select, mac, ip, bool, ref
+#   text, textarea, number, date, select, mac, ip, bool, ref, list
 # A `ref` field holds the id of another item, of the kind named in `ref`.
+# A `list` field holds several labelled values -- [{"label": "Mobiel",
+# "value": "06-..."}] -- because one phone number per person is a fiction.
 
 # Not "afgevoerd": equipment that is out of use is archived, and one fact
 # belongs in one place.
@@ -54,17 +56,17 @@ COMPUTER = {
             _f("status", "Status", "select", options=STATUS),
             _f("purpose", "Waar het voor dient", "textarea",
                hint="Waarom staat deze machine er — welke rol, welke toepassing."),
-            _f("location", "Locatie", "ref", ref="location"),
-            _f("user", "In gebruik bij", "ref", ref="contact"),
+            _f("location", "Locatie", "ref", ref="location", icon="building"),
+            _f("user", "In gebruik bij", "ref", ref="contact", icon="user"),
         ]},
         {"key": "hardware", "label": "Hardware", "fields": [
-            _f("cpu", "Processor", rmm="cpu"),
-            _f("memory", "Geheugen", rmm="memory"),
-            _f("storage", "Schijven", rmm="storage"),
-            _f("os", "Besturingssysteem", rmm="os"),
-            _f("manufacturer", "Merk", rmm="manufacturer"),
-            _f("model", "Model", rmm="model"),
-            _f("serial", "Serienummer", rmm="serial"),
+            _f("cpu", "Processor", rmm="cpu", icon="cpu"),
+            _f("memory", "Geheugen", rmm="memory", icon="mem"),
+            _f("storage", "Schijven", rmm="storage", icon="disk"),
+            _f("os", "Besturingssysteem", rmm="os", icon="package"),
+            _f("manufacturer", "Merk", rmm="manufacturer", icon="box"),
+            _f("model", "Model", rmm="model", icon="box"),
+            _f("serial", "Serienummer", rmm="serial", icon="clipboard"),
         ]},
         {"key": "beheer", "label": "Beheer", "fields": [
             _f("installed_at", "Geïnstalleerd op", "date"),
@@ -93,7 +95,7 @@ NETWORK = {
             _f("role", "Soort", "select",
                options=["Switch", "Firewall", "Router", "Access point", "Modem"]),
             _f("status", "Status", "select", options=STATUS),
-            _f("ports", "Aantal poorten", "number",
+            _f("ports", "Aantal poorten", "number", icon="network",
                hint="Alleen bij een switch. Hiermee wordt de poortenlijst opgebouwd."),
             _f("location", "Locatie", "ref", ref="location"),
         ]},
@@ -101,8 +103,8 @@ NETWORK = {
             _f("manufacturer", "Merk", rmm="manufacturer"),
             _f("model", "Model", rmm="model"),
             _f("serial", "Serienummer", rmm="serial"),
-            _f("firmware", "Firmware"),
-            _f("mgmt_ip", "Beheeradres", "ip"),
+            _f("firmware", "Firmware", icon="package"),
+            _f("mgmt_ip", "Beheeradres", "ip", icon="globe"),
         ]},
         {"key": "beheer", "label": "Beheer", "fields": [
             _f("installed_at", "Geïnstalleerd op", "date"),
@@ -163,12 +165,12 @@ INTERNET = {
     "columns": ["provider", "line_type", "speed_down", "contract_until"],
     "groups": [
         {"key": "lijn", "label": "De lijn", "fields": [
-            _f("provider", "Provider"),
+            _f("provider", "Provider", icon="cloud"),
             _f("line_type", "Soort lijn", "select",
                options=["Glasvezel", "Coax", "DSL", "4G/5G", "Straalverbinding"]),
-            _f("speed_down", "Snelheid neer", hint="Bijvoorbeeld 1 Gbit/s."),
-            _f("speed_up", "Snelheid op"),
-            _f("ip_range", "Vast IP-blok",
+            _f("speed_down", "Snelheid neer", hint="Bijvoorbeeld 1 Gbit/s.", icon="arrowDown"),
+            _f("speed_up", "Snelheid op", icon="arrowUp"),
+            _f("ip_range", "Vast IP-blok", icon="globe",
                hint="Het toegewezen adres of blok, bijvoorbeeld 203.0.113.8/29."),
             _f("location", "Locatie", "ref", ref="location"),
             _f("router", "Aangesloten op", "ref", ref="network",
@@ -178,10 +180,10 @@ INTERNET = {
             _f("account_number", "Klant- of circuitnummer"),
             _f("contract_until", "Contract tot", "date", expiry=True),
             _f("notice_period", "Opzegtermijn"),
-            _f("monthly", "Bedrag per maand"),
+            _f("monthly", "Bedrag per maand", icon="euro"),
         ]},
         {"key": "storing", "label": "Bij een storing", "fields": [
-            _f("support_phone", "Storingsnummer"),
+            _f("support_phone", "Storingsnummer", icon="phone"),
             _f("support_hours", "Bereikbaar"),
             _f("notes", "Notities", "textarea"),
         ]},
@@ -220,13 +222,15 @@ CONTACT = {
     "sub": "Wie je bij deze klant belt",
     "backref": "Waar deze persoon bij hoort",
     # What a list shows at a glance.
-    "columns": ["job", "email", "phone"],
+    "columns": ["job", "emails", "phones"],
     "groups": [
         {"key": "wie", "label": "Wie", "fields": [
             _f("job", "Functie"),
-            _f("email", "E-mailadres"),
-            _f("phone", "Telefoon"),
-            _f("mobile", "Mobiel"),
+            _f("emails", "E-mailadressen", "list", icon="mail",
+               labels=["Werk", "Privé", "Algemeen", "Facturatie"],
+               hint="Meerdere mag: zet erbij welk adres waarvoor is."),
+            _f("phones", "Telefoonnummers", "list", icon="phone",
+               labels=["Werk", "Mobiel", "Privé", "Centrale", "Storing"]),
             _f("primary", "Hoofdcontactpersoon", "bool"),
         ]},
         {"key": "over", "label": "Over", "fields": [
@@ -260,8 +264,8 @@ PASSWORD = {
         {"key": "wat", "label": "Waarvoor", "fields": [
             _f("category", "Soort", "select",
                options=["Beheerder", "Gebruiker", "Dienst", "Netwerk", "Overig"]),
-            _f("username", "Gebruikersnaam"),
-            _f("url", "Adres", hint="Waar je ermee inlogt."),
+            _f("username", "Gebruikersnaam", icon="user"),
+            _f("url", "Adres", hint="Waar je ermee inlogt.", icon="globe"),
         ]},
         {"key": "beheer", "label": "Beheer", "fields": [
             _f("rotate_at", "Vervangen vóór", "date", expiry=True,
@@ -359,6 +363,18 @@ def clean(name: str, values: dict) -> dict:
         if not spec or spec.get("rmm"):
             continue
         if value is None:
+            continue
+        if spec["type"] == "list":
+            rows = []
+            for entry in (value if isinstance(value, list) else []):
+                if not isinstance(entry, dict):
+                    continue
+                text = str(entry.get("value") or "").strip()
+                if text:
+                    rows.append({"label": str(entry.get("label") or "").strip(),
+                                 "value": text})
+            if rows:
+                out[key] = rows
             continue
         if spec["type"] == "bool":
             # The history stores what a person reads ("ja"/"nee"), so undoing a

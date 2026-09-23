@@ -19,7 +19,9 @@ const ICON = {
   chevD: I('<path d="m6 9 6 6 6-6"/>'),
   building: I('<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4M8 6h.01M12 6h.01M16 6h.01M8 10h.01M12 10h.01M16 10h.01M8 14h.01M12 14h.01M16 14h.01"/>'),
   cpu: I('<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v2m6-2v2M9 20v2m6-2v2M2 9h2m-2 6h2m16-6h2m-2 6h2"/>'),
-  mem: I('<rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 7v10m4-10v10m4-10v10"/>'),
+  // A memory module with its notch and pins, rather than a striped box: at
+  // 16 pixels the difference is what makes it readable at a glance.
+  mem: I('<path d="M2.5 7h19v8h-2v2h-3v-2h-5v2h-3v-2h-6z"/><path d="M6 10v2M9 10v2M12 10v2M15 10v2M18 10v2"/>', { w: 1.6 }),
   disk: I('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/><path d="m16.5 7.5-3 3"/>'),
   gpu: I('<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="8" cy="12" r="2.5"/><circle cx="15" cy="12" r="2.5"/><path d="M2 18v2m4-2v2"/>'),
   thermo: I('<path d="M14 14.76V5a2 2 0 0 0-4 0v9.76a4 4 0 1 0 4 0Z"/>'),
@@ -50,6 +52,9 @@ const ICON = {
   user: I('<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>'),
   mail: I('<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m3 6 9 7 9-7"/>'),
   key: I('<circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.5 12.5 9-9M16 4l3 3M19 7l2-2"/>'),
+  phone: I('<path d="M5 3h4l2 5-2.5 1.5a12 12 0 0 0 6 6L16 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 5a2 2 0 0 1 2-2Z"/>'),
+  mobile: I('<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>'),
+  euro: I('<path d="M17 5a7 7 0 1 0 0 14"/><path d="M4 10h9M4 14h9"/>'),
   clipboard: I('<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>'),
   homeassistant: I('<path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-9"/><circle cx="12" cy="13" r="1.6"/><path d="M12 14.6V20M9.2 11.8 12 14.6l2.8-2.8"/>'),
   keyboard: I('<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M10 13h4M7 16h10"/>'),
