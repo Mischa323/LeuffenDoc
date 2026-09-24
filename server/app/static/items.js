@@ -660,6 +660,51 @@ window.DocItems = function (ctx) {
       let shown = null;
       let hideTimer = null;
 
+      /* The links made for this password: who they were for, how many looks
+         are left, and a way to close one that is still open. */
+      async function drawShares(everything) {
+        const box = slot.querySelector(".sx-shares");
+        if (!box) return;
+        let shares = [];
+        try { shares = await api(`/api/items/${item.id}/shares`); } catch (e) { return; }
+        shares = shares.filter((sh) => sh.field_key === field);
+        if (!shares.length) { box.innerHTML = ""; return; }
+        // Open links always; of the closed ones only the latest few, since a
+        // password shared every month would otherwise push the page down.
+        const closed = shares.filter((sh) => sh.state !== "open");
+        const hidden = everything ? 0 : Math.max(0, closed.length - 3);
+        if (hidden) {
+          const keep = new Set(closed.slice(0, 3).map((sh) => sh.id));
+          shares = shares.filter((sh) => sh.state === "open" || keep.has(sh.id));
+        }
+        const word = { open: "open", opgebruikt: "opgebruikt", verlopen: "verlopen", ingetrokken: "ingetrokken" };
+        box.innerHTML = `<div class="share-list">${shares.map((sh) => `
+            <div class="share-row ${sh.state}">
+              ${ICON.link}
+              <span>${sh.note ? esc(sh.note) : "Deellink"}</span>
+              <span class="muted">${sh.views}/${sh.max_views} keer geopend</span>
+              <span class="muted">${sh.state === "open"
+                ? `tot ${new Date(sh.expires_at * 1000).toLocaleString("nl-NL")}`
+                : esc(sh.revoked_why || word[sh.state])}</span>
+              <span class="tag${sh.state === "open" ? " ok" : ""}">${word[sh.state]}</span>
+              ${sh.state === "open"
+                ? `<button type="button" class="btn ghost sm" data-revoke="${esc(sh.id)}">Intrekken</button>` : ""}
+            </div>`).join("")}
+            ${hidden ? `<div class="share-row more"><button type="button" class="btn ghost sm sh-older">
+                ${hidden} oudere ${hidden === 1 ? "link" : "links"} tonen</button></div>` : ""}</div>`;
+        const older = box.querySelector(".sh-older");
+        if (older) older.onclick = () => drawShares(true);
+        box.querySelectorAll("[data-revoke]").forEach((b) => {
+          b.onclick = async () => {
+            try {
+              await api(`/api/shares/${b.dataset.revoke}`, { method: "DELETE" });
+              toast("Deellink ingetrokken");
+              drawShares();
+            } catch (e) { toast(e.message); }
+          };
+        });
+      }
+
       const save = async (input) => {
         const value = input.value;
         if (!value) { toast("Vul eerst een wachtwoord in"); input.focus(); return; }
@@ -700,10 +745,12 @@ window.DocItems = function (ctx) {
                 <button type="button" class="btn ghost sm sx-show">${shown ? ICON.eyeOff : ICON.eye} ${shown ? "Verberg" : "Tonen"}</button>
                 <button type="button" class="btn ghost sm sx-copy">${ICON.copy} Kopiëren</button>
                 <button type="button" class="btn ghost sm sx-edit">${ICON.pencil} Wijzigen</button>
+                <button type="button" class="btn ghost sm sx-share">${ICON.link} Delen</button>
               </div>
               <div class="secret-note">Elke keer dat dit getoond of gekopieerd wordt,
                 komt dat in het logboek te staan.</div>
-              <div class="sx-form"></div>`
+              <div class="sx-form"></div>
+              <div class="sx-shares"></div>`
             : `<div class="secret-row"><span class="muted">Er staat nog niets in.</span></div>
                <div class="cb-pad">${setForm("Opslaan")}</div>`}
           </div>`;
@@ -736,6 +783,56 @@ window.DocItems = function (ctx) {
               toast("Kopiëren mag niet in deze browser — hier is hij");
             } catch (inner) { toast(inner.message); }
           }
+        };
+
+        drawShares();
+        slot.querySelector(".sx-share").onclick = () => {
+          const box = slot.querySelector(".sx-form");
+          if (box.dataset.open === "share") { box.dataset.open = ""; box.innerHTML = ""; return; }
+          box.dataset.open = "share";
+          box.innerHTML = `<div class="cb-pad share-form">
+              <div class="plug-row">
+                <label class="muted">Geldig</label>
+                <select class="inp sh-hours" style="max-width:130px">
+                  <option value="1">1 uur</option><option value="24" selected>24 uur</option>
+                  <option value="72">3 dagen</option><option value="168">7 dagen</option></select>
+                <label class="muted">te openen</label>
+                <select class="inp sh-views" style="max-width:110px">
+                  <option value="1" selected>1 keer</option><option value="2">2 keer</option>
+                  <option value="3">3 keer</option><option value="5">5 keer</option>
+                  <option value="10">10 keer</option></select>
+                <input class="inp sh-note" placeholder="Voor wie (optioneel)" style="flex:1;min-width:160px" />
+                <button type="button" class="btn sm sh-make">${ICON.link} Link maken</button>
+              </div>
+              <div class="hint">Voor iemand zonder account. De link geeft het wachtwoord zoals het nú is;
+                wijzig je het later, dan houdt de link op met werken.</div>
+            </div>`;
+          box.querySelector(".sh-make").onclick = async (ev) => {
+            const button = ev.currentTarget;
+            button.disabled = true;
+            try {
+              const made = await api(`/api/items/${item.id}/shares${query}`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ hours: Number(box.querySelector(".sh-hours").value),
+                                       views: Number(box.querySelector(".sh-views").value),
+                                       note: box.querySelector(".sh-note").value }),
+              });
+              // Shown once. Only a fingerprint of it is kept, so it cannot be
+              // looked up again later -- by us or by anyone with the database.
+              box.innerHTML = `<div class="cb-pad"><div class="share-made">
+                  <div class="ct">${ICON.check} Link gemaakt — kopieer hem nu, hij wordt niet meer getoond</div>
+                  <div class="plug-row"><span class="secret-val mono sh-url">${esc(made.url)}</span>
+                    <button type="button" class="btn sm sh-copy">${ICON.copy} Kopiëren</button></div>
+                  ${made.guessed_address ? `<div class="hint">Het openbare adres is niet ingesteld, dus dit adres is
+                    geraden uit je eigen verbinding. Controleer het, of stel het in onder Instellingen.</div>` : ""}
+                </div></div>`;
+              box.querySelector(".sh-copy").onclick = async () => {
+                try { await navigator.clipboard.writeText(made.url); toast("Link gekopieerd"); }
+                catch (e) { toast("Kopiëren mag niet in deze browser — selecteer de link"); }
+              };
+              drawShares();
+            } catch (e) { toast(e.message); button.disabled = false; }
+          };
         };
 
         slot.querySelector(".sx-edit").onclick = () => {

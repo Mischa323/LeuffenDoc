@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="nl" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="referrer" content="no-referrer" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <title>Gedeeld wachtwoord</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    body { background: var(--bg); }
+    .share { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; }
+    .share .card { width: 100%; max-width: 460px; background: var(--surface); border: 1px solid var(--border);
+                   border-radius: var(--r-lg); padding: 28px; }
+    .share .mark { display: flex; align-items: center; gap: 11px; font-weight: 700; font-size: 18px;
+                   letter-spacing: -0.02em; margin-bottom: 14px; }
+    .share .mark .logo { width: 34px; height: 34px; border-radius: var(--r-sm); display: grid;
+                         place-items: center; background: var(--accent-soft); color: var(--accent); }
+    .share .mark .logo svg { width: 18px; height: 18px; }
+    .share .mark span { color: var(--text-dim); font-weight: 600; }
+    .share p.lead { color: var(--text-dim); font-size: 13.5px; line-height: 1.6; margin: 0 0 20px; }
+    .share .btn.wide { width: 100%; justify-content: center; }
+    .share h2 { margin: 0 0 14px; font-size: 16px; }
+    .share .row { margin-bottom: 12px; }
+    .share .row label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 5px; }
+    .share .val { display: flex; gap: 8px; align-items: center; }
+    .share .val .box { flex: 1; font-size: 14px; padding: 9px 12px; border-radius: var(--r-sm);
+                       background: var(--surface-2); border: 1px solid var(--border); word-break: break-all; }
+    .share .secret .box { font-size: 16px; letter-spacing: .04em; }
+    .share .after { margin-top: 16px; font-size: 12.5px; color: var(--text-faint); line-height: 1.6; }
+    .share .after b { color: var(--warn); }
+  </style>
+</head>
+<body>
+  <div class="share">
+    <div class="card">
+      <div class="mark"><span class="logo" id="logo"></span> Leuffen <span>Doc</span></div>
+      <div id="body">
+        <p class="lead">Er is een wachtwoord met je gedeeld. Het verschijnt pas als je op de knop
+          drukt, en deze link werkt maar een beperkt aantal keer — open hem dus pas als je het
+          nodig hebt.</p>
+        <button class="btn wide" id="open">Wachtwoord tonen</button>
+      </div>
+    </div>
+  </div>
+  <script src="/icons.js"></script>
+  <script src="/deel.js"></script>
+</body>
+</html>

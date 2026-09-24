@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import secrets
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -57,6 +58,10 @@ async def _sync_loop() -> None:
                 await asyncio.to_thread(rmm.sync)
             except Exception as exc:              # never let the loop die
                 log.warning("sync round failed: %r", exc)
+        try:
+            await asyncio.to_thread(database.forget_spent_shares)
+        except Exception as exc:
+            log.warning("clearing spent share links failed: %r", exc)
         await asyncio.sleep(max(60, int(settings.get("DOC_SYNC_MINUTES")) * 60))
 
 
@@ -900,6 +905,9 @@ async def set_secret(item_id: str, request: Request, field: str = "main",
         raise HTTPException(status_code=400, detail="Er is geen wachtwoord opgegeven")
     had = database.secret_state(item_id, field)["has_secret"]
     database.put_secret(item_id, vault.seal(password), by=user["email"], field=field)
+    # Links still open would go on handing out the old password -- which is
+    # likely why it is being changed. They close with it.
+    closed = database.revoke_open_shares(item_id, field, "het wachtwoord is gewijzigd")
     # The history says that it changed and when -- never what it was, and not
     # even how long it is, which is more than a bystander should learn.
     database.record(item_id, "updated",
@@ -907,7 +915,9 @@ async def set_secret(item_id: str, request: Request, field: str = "main",
                       "from": "ingesteld" if had else "", "to": "gewijzigd" if had else "ingesteld"}],
                     by=user["email"])
     database.audit("secret.write", user_email=user["email"], org_id=item["org_id"],
-                   target=item["name"], detail=_secret_label(item, field),
+                   target=item["name"],
+                   detail=_secret_label(item, field)
+                   + (f"; {closed} open deellink(s) ingetrokken" if closed else ""),
                    ip=auth.client_ip(request))
     return database.secret_state(item_id, field)
 
@@ -1381,6 +1391,154 @@ async def set_item_access(item_id: str, request: Request,
                        target=item["name"], detail=", ".join(wanted) or EVERYONE,
                        ip=auth.client_ip(request))
     return {"restricted": bool(wanted), "people": wanted}
+
+
+# --------------------------------------------------------------------------- #
+# Share links
+#
+# For handing a password to someone without an account -- a customer's own IT
+# contact, a supplier -- for a while and a few looks. The link is shown once,
+# only its hash is kept, and the password is a snapshot sealed at the moment
+# of sharing: changing a leaked password must not hand the new one to whoever
+# holds an old link, so changing it also closes the links still open.
+#
+# The page behind the link only shows the password after a click. Teams,
+# Outlook and Slack open a link to draw a preview, and that preview must not
+# use up a link meant for one look.
+# --------------------------------------------------------------------------- #
+SHARE_HOURS = (1, 24, 72, 168)
+SHARE_VIEWS = (1, 2, 3, 5, 10)
+
+
+def _token_hash(token: str) -> str:
+    import hashlib
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _share_out(share: dict) -> dict:
+    """A share as the item page lists it: never the link, never the password."""
+    now = time.time()
+    if share.get("revoked_at"):
+        state = "ingetrokken"
+    elif share["views"] >= share["max_views"]:
+        state = "opgebruikt"
+    elif share["expires_at"] <= now:
+        state = "verlopen"
+    else:
+        state = "open"
+    return {k: share.get(k) for k in ("id", "field_key", "note", "created_at", "created_by",
+                                      "expires_at", "max_views", "views", "last_view",
+                                      "revoked_why")} | {"state": state}
+
+
+@app.get("/api/items/{item_id}/shares")
+def list_shares(item_id: str, user: dict = Depends(auth.current_user)):
+    _item_for(user, item_id, "reveal")
+    return [_share_out(s) for s in database.shares_of(item_id)]
+
+
+@app.post("/api/items/{item_id}/shares")
+async def create_share(item_id: str, request: Request, field: str = "main",
+                       user: dict = Depends(auth.current_user)):
+    item, _ = _secret_field(user, item_id, field, "reveal")
+    body = await request.json()
+    try:
+        hours = int(body.get("hours") or 24)
+        views = int(body.get("views") or 1)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Geldigheid en aantal keer moeten getallen zijn")
+    if hours not in SHARE_HOURS or views not in SHARE_VIEWS:
+        raise HTTPException(status_code=400, detail="Kies een geldigheid en een aantal keer uit de lijst")
+    record = database.get_secret(item_id, field)
+    if not record:
+        raise HTTPException(status_code=404, detail="Er staat nog geen wachtwoord in om te delen")
+    try:
+        password = vault.unseal(record)
+    except Exception:
+        raise HTTPException(status_code=500,
+                            detail="Dit wachtwoord kan niet geopend worden. Klopt DOC_SECRET_KEY nog?")
+
+    token = secrets.token_urlsafe(32)
+    note = (str(body.get("note") or "").strip())[:120] or None
+    share = database.add_share(item_id, field, _token_hash(token), vault.pack(vault.seal(password)),
+                               note, user["email"], time.time() + hours * 3600, views)
+    label = _secret_label(item, field)
+    database.record(item_id, "updated",
+                    [{"key": "share", "label": f"{label} gedeeld",
+                      "from": "", "to": f"{hours} uur, {views}×{f' — {note}' if note else ''}"}],
+                    by=user["email"])
+    database.audit("share.create", user_email=user["email"], org_id=item["org_id"],
+                   target=item["name"], detail=f"{label}, {hours} uur, {views}×"
+                   + (f", voor {note}" if note else ""), ip=auth.client_ip(request))
+
+    # An address someone else can open. Built from the public address when it
+    # is set; from this request otherwise, which behind a proxy may be wrong.
+    base = public_url()
+    if not base.startswith("http"):
+        base = str(request.base_url).rstrip("/")
+    return {"url": f"{base}/deel/{token}", "guessed_address": not public_url().startswith("http"),
+            "share": _share_out(share)}
+
+
+@app.delete("/api/shares/{share_id}")
+def withdraw_share(share_id: str, request: Request, user: dict = Depends(auth.current_user)):
+    share = database.get_share(share_id)
+    if not share:
+        raise HTTPException(status_code=404, detail="Deze deellink bestaat niet")
+    item, _ = _item_for(user, share["item_id"], "reveal")
+    database.revoke_share(share_id, f"ingetrokken door {user['email']}")
+    database.audit("share.revoke", user_email=user["email"], org_id=item["org_id"],
+                   target=item["name"], ip=auth.client_ip(request))
+    return _share_out(database.get_share(share_id))
+
+
+# ---- the page behind the link: no account, no cookie, no cache ----
+SHARE_HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+                 "X-Robots-Tag": "noindex, nofollow"}
+
+
+@app.get("/deel/{token}")
+def share_page(token: str):
+    """The page only. Opening it takes no look: a link preview opens it too."""
+    with open(os.path.join(STATIC_DIR, "deel.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    for ext in (".js", ".css"):
+        html = html.replace(f'{ext}"', f'{ext}?v={VERSION}"')
+    return HTMLResponse(html, headers=SHARE_HEADERS)
+
+
+@app.post("/deel/{token}")
+def share_open(token: str, request: Request):
+    """The one call that hands the password over, and counts a look."""
+    share = database.share_by_token(_token_hash(token))
+    gone = JSONResponse({"detail": "Deze link werkt niet meer. Hij is verlopen, al gebruikt, "
+                                   "of ingetrokken. Vraag om een nieuwe."},
+                        status_code=410, headers=SHARE_HEADERS)
+    if not share or not database.count_view(share["id"]):
+        return gone
+    try:
+        password = vault.unseal(vault.unpack(share["sealed_json"]))
+    except Exception:
+        return gone
+    database.forget_spent_shares()        # this may have been its last look
+    item = database.get_item(share["item_id"]) or {}
+    fields = item.get("fields") or {}
+    database.audit("share.view", org_id=item.get("org_id"), target=item.get("name"),
+                   detail=f"deellink van {share['created_by']}"
+                          + (f" ({share['note']})" if share.get("note") else ""),
+                   ip=auth.client_ip(request))
+    fresh = database.get_share(share["id"])
+    return JSONResponse({
+        "name": item.get("name"),
+        "label": "Wachtwoord" if share["field_key"] == "main"
+                 else schema.label_of(item.get("kind", ""), share["field_key"]),
+        "username": fields.get("username") if share["field_key"] == "main" else None,
+        "url": fields.get("url") if share["field_key"] == "main" else None,
+        "password": password,
+        "looks_left": max(0, fresh["max_views"] - fresh["views"]),
+        "expires_at": fresh["expires_at"],
+        "shared_by": share["created_by"],
+    }, headers=SHARE_HEADERS)
 
 
 # --------------------------------------------------------------------------- #

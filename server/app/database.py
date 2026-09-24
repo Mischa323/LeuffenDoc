@@ -205,6 +205,30 @@ CREATE TABLE IF NOT EXISTS item_access (
 );
 CREATE INDEX IF NOT EXISTS idx_item_access_user ON item_access(user_email);
 
+-- A password shared with someone who has no account, for a while and a few
+-- looks. Only a hash of the link is kept: someone reading the database cannot
+-- make a working link from it. The password itself is sealed into the share
+-- at the moment it is made -- a snapshot, so changing a leaked password does
+-- not hand the new one to whoever holds an old link.
+CREATE TABLE IF NOT EXISTS shares (
+    id          TEXT PRIMARY KEY,
+    item_id     TEXT NOT NULL,
+    field_key   TEXT NOT NULL DEFAULT 'main',
+    token_hash  TEXT NOT NULL UNIQUE,
+    sealed_json TEXT NOT NULL,
+    note        TEXT,
+    created_at  REAL NOT NULL,
+    created_by  TEXT,
+    expires_at  REAL NOT NULL,
+    max_views   INTEGER NOT NULL DEFAULT 1,
+    views       INTEGER NOT NULL DEFAULT 0,
+    last_view   REAL,
+    revoked_at  REAL,
+    revoked_why TEXT,
+    FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_shares_item ON shares(item_id);
+
 -- Types people define themselves. The built-in ones live in schema.py; these
 -- join them at run time and are rendered by exactly the same code, which is
 -- why the interface needs nothing new to show one.
@@ -1006,3 +1030,74 @@ def people_at(org_id: str) -> list:
     return rows(
         "SELECT email, display_name, is_admin FROM users WHERE is_admin=1 OR email IN "
         "(SELECT user_email FROM org_users WHERE org_id=?) ORDER BY email", (org_id,))
+
+
+# --------------------------------------------------------------------------- #
+# Share links
+# --------------------------------------------------------------------------- #
+def add_share(item_id: str, field: str, token_hash: str, sealed: str, note: str | None,
+              by: str | None, expires_at: float, max_views: int) -> dict:
+    share_id = uuid.uuid4().hex[:12]
+    with write() as conn:
+        conn.execute(
+            "INSERT INTO shares (id, item_id, field_key, token_hash, sealed_json, note, "
+            "created_at, created_by, expires_at, max_views) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (share_id, item_id, field, token_hash, sealed, note, time.time(), by,
+             expires_at, max_views))
+    return get_share(share_id)
+
+
+def get_share(share_id: str) -> dict | None:
+    return row("SELECT * FROM shares WHERE id=?", (share_id,))
+
+
+def share_by_token(token_hash: str) -> dict | None:
+    return row("SELECT * FROM shares WHERE token_hash=?", (token_hash,))
+
+
+def shares_of(item_id: str) -> list:
+    return rows("SELECT id, item_id, field_key, note, created_at, created_by, expires_at, "
+                "max_views, views, last_view, revoked_at, revoked_why FROM shares "
+                "WHERE item_id=? ORDER BY created_at DESC", (item_id,))
+
+
+def count_view(share_id: str) -> bool:
+    """Take one look, if one is left. Done in a single statement, so two people
+    opening a one-time link at the same moment cannot both get it."""
+    now = time.time()
+    with write() as conn:
+        cur = conn.execute(
+            "UPDATE shares SET views = views + 1, last_view=? WHERE id=? AND revoked_at IS NULL "
+            "AND views < max_views AND expires_at > ?", (now, share_id, now))
+        return cur.rowcount == 1
+
+
+def revoke_share(share_id: str, why: str) -> None:
+    with write() as conn:
+        conn.execute("UPDATE shares SET revoked_at=?, revoked_why=? WHERE id=? AND revoked_at IS NULL",
+                     (time.time(), why, share_id))
+    forget_spent_shares()
+
+
+def forget_spent_shares() -> int:
+    """Drop the sealed copy from every link that can no longer be opened. The
+    row stays, for the list and the log; the old password it carried has no
+    business outliving the link."""
+    now = time.time()
+    with write() as conn:
+        cur = conn.execute(
+            "UPDATE shares SET sealed_json='' WHERE sealed_json != '' AND "
+            "(revoked_at IS NOT NULL OR views >= max_views OR expires_at <= ?)", (now,))
+        return cur.rowcount
+
+
+def revoke_open_shares(item_id: str, field: str, why: str) -> int:
+    now = time.time()
+    with write() as conn:
+        cur = conn.execute(
+            "UPDATE shares SET revoked_at=?, revoked_why=? WHERE item_id=? AND field_key=? "
+            "AND revoked_at IS NULL AND views < max_views AND expires_at > ?",
+            (now, why, item_id, field, now))
+        closed = cur.rowcount
+    forget_spent_shares()
+    return closed

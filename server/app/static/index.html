@@ -273,6 +273,24 @@
     .acc-name { font-weight: 600; }
     .acc-foot { display: flex; align-items: center; gap: 8px; padding: 12px 18px; }
     .tag svg { width: 10px; height: 10px; margin-right: 3px; }
+
+    /* ---- share links ---- */
+    .share-form .plug-row label { font-size: 12px; }
+    .share-made { border: 1px solid var(--border); background: var(--surface-2);
+                  border-radius: var(--r-md); padding: 12px 14px; }
+    .share-made .ct { display: flex; align-items: center; gap: 7px; font-weight: 600;
+                      font-size: 13px; color: var(--good); }
+    .share-made .ct svg { width: 15px; height: 15px; }
+    .share-made .secret-val { font-size: 12.5px; letter-spacing: 0; }
+    .share-list { border-top: 1px solid var(--border-soft); }
+    .share-row { display: flex; align-items: center; gap: 10px; padding: 9px 18px; font-size: 12.5px;
+                 border-bottom: 1px solid var(--border-soft); flex-wrap: wrap; }
+    .share-row:last-child { border-bottom: 0; }
+    .share-row svg { width: 14px; height: 14px; color: var(--text-faint); }
+    .share-row:not(.open) { opacity: .6; }
+    .share-row .btn { margin-left: auto; }
+    .share-row.more { opacity: 1; }
+    .share-row.more .btn { margin-left: 0; }
   </style>
 </head>
 <body>

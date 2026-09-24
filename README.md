@@ -98,6 +98,24 @@ Users, customers and access are pulled from the RMM every `DOC_SYNC_MINUTES`
 and whenever somebody signs in, so access withdrawn there disappears here.
 **Klanten** shows the state of that link, with a button to sync on the spot.
 
+## Sharing a password with someone outside
+
+**Delen** on a password makes a link for someone without an account — a
+supplier, a customer's new employee. You choose how long it works (an hour to a
+week) and how many times it may be opened; the link is shown once, and only a
+hash of it is kept. The page behind it shows nothing until the button is
+pressed, because Teams, Outlook and Slack open links by themselves to draw a
+preview. Changing the password closes every link still open for it, and every
+opening is in the log with where it came from.
+
+For the link to work for someone outside, two things:
+
+- **`DOC_PUBLIC_URL`** must be set, or the address is guessed from the request
+  (and the page says so).
+- **`/deel/`** must be reachable from where that person is. If LeuffenDoc is
+  only reachable over a VPN, publish that one path; it needs no sign-in and
+  hands out nothing without a valid link.
+
 ## Behind a reverse proxy
 
 TLS is terminated by the proxy, as with the RMM. The server needs three things

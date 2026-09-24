@@ -23,6 +23,7 @@ whether their backup contains both halves.
 from __future__ import annotations
 
 import base64
+import json
 import os
 import time
 
@@ -100,3 +101,18 @@ def state() -> dict:
     stored = bool(database.get_setting(KEY_SETTING))
     return {"from_environment": key_from_environment(),
             "in_database": stored and not key_from_environment()}
+
+
+def pack(record: dict) -> str:
+    """A sealed record as text, for storing in a column."""
+    out = {k: base64.b64encode(v).decode() for k, v in record.items()
+           if isinstance(v, (bytes, bytearray))}
+    out["key_version"] = record.get("key_version", VERSION)
+    return json.dumps(out)
+
+
+def unpack(text: str) -> dict:
+    raw = json.loads(text)
+    record = {k: base64.b64decode(v) for k, v in raw.items() if k != "key_version"}
+    record["key_version"] = raw.get("key_version", VERSION)
+    return record
