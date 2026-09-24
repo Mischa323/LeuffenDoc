@@ -295,9 +295,10 @@ def me(user: dict = Depends(auth.current_user)):
 def orgs(user: dict = Depends(auth.current_user)):
     """The customers this person may see: everything for an administrator, and
     otherwise the ones they have been given."""
-    if user.get("is_admin"):
-        return database.list_orgs()
-    return database.user_orgs(user["email"])
+    orgs = database.list_orgs() if user.get("is_admin") else database.user_orgs(user["email"])
+    # What this person may do at each, so the page does not offer a button the
+    # server would refuse. The server still checks every time.
+    return [{**o, "may": _may(user, o["id"])} for o in orgs]
 
 
 @app.post("/api/orgs")
@@ -348,28 +349,51 @@ async def rmm_sync_now(request: Request, user: dict = Depends(auth.current_user)
 # different way of storing, reading or recording it. The interface builds its
 # forms from the same catalogue, so a field added there needs nothing here.
 # --------------------------------------------------------------------------- #
-def _may_see(user: dict, org_id: str) -> dict:
-    """The customer, if this person may see it.
+# Roles come from the RMM, per customer. A viewer there reads the
+# documentation here but changes nothing and sees no passwords; a member or an
+# admin there may do both. "tech" is what accounts were given before roles came
+# across, and counts as a member.
+WRITERS = {"admin", "member", "tech"}
+
+
+def _may(user: dict, org_id: str) -> dict:
+    """What this person may do at one customer."""
+    role = "admin" if user.get("is_admin") else (database.user_role(user["email"], org_id) or "")
+    writer = role in WRITERS
+    return {"role": role or None, "edit": writer, "reveal": writer}
+
+
+def _refuse(org: dict, need: str) -> None:
+    what = ("wijzigen" if need == "edit" else "wachtwoorden inzien")
+    raise HTTPException(
+        status_code=403,
+        detail=f"Je mag bij {org['name']} niets {what}: je hebt daar alleen leesrechten. "
+               "Dat wordt in de RMM geregeld, met de rol van je account bij deze klant.")
+
+
+def _may_see(user: dict, org_id: str, need: str = "read") -> dict:
+    """The customer, if this person may see it -- and do what is asked.
 
     An administrator sees every customer; everyone else sees the ones the RMM
     gave them. A customer they may not see is reported as missing rather than
-    forbidden -- "you may not see X" already tells them X exists.
+    forbidden -- "you may not see X" already tells them X exists. Seeing it but
+    not being allowed to change it is a plain refusal, with the reason.
     """
     org = database.get_org(org_id)
     if not org:
         raise HTTPException(status_code=404, detail="Deze klant bestaat niet")
-    if user.get("is_admin"):
-        return org
-    if not any(o["id"] == org_id for o in database.user_orgs(user["email"])):
+    if not user.get("is_admin") and             not any(o["id"] == org_id for o in database.user_orgs(user["email"])):
         raise HTTPException(status_code=404, detail="Deze klant bestaat niet")
+    if need != "read" and not _may(user, org_id)[need]:
+        _refuse(org, need)
     return org
 
 
-def _item_for(user: dict, item_id: str) -> tuple[dict, dict]:
+def _item_for(user: dict, item_id: str, need: str = "read") -> tuple[dict, dict]:
     item = database.get_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Dit item bestaat niet")
-    return item, _may_see(user, item["org_id"])
+    return item, _may_see(user, item["org_id"], need)
 
 
 def _labeller(kind: str):
@@ -439,7 +463,7 @@ def org_summary(org_id: str, user: dict = Depends(auth.current_user)):
 @app.post("/api/orgs/{org_id}/items")
 async def create_org_item(org_id: str, request: Request,
                           user: dict = Depends(auth.current_user)):
-    _may_see(user, org_id)
+    _may_see(user, org_id, "edit")
     body = await request.json()
     kind = (body.get("kind") or "").strip()
     if not schema.kind(kind):
@@ -476,7 +500,7 @@ def read_item(item_id: str, user: dict = Depends(auth.current_user)):
 @app.patch("/api/items/{item_id}")
 async def edit_item(item_id: str, request: Request,
                     user: dict = Depends(auth.current_user)):
-    item, _ = _item_for(user, item_id)
+    item, _ = _item_for(user, item_id, "edit")
     body = await request.json()
     name = body.get("name")
     if name is not None and not str(name).strip():
@@ -497,7 +521,7 @@ async def archive_item(item_id: str, request: Request,
     """Out of the way, not gone. Documentation hangs off these things, and a
     machine that left the building is often exactly what you need to look up a
     year later."""
-    item, _ = _item_for(user, item_id)
+    item, _ = _item_for(user, item_id, "edit")
     body = await request.json() if await request.body() else {}
     archived = bool(body.get("archived", True))
     updated = database.set_archived(item_id, archived, by=user["email"])
@@ -548,7 +572,7 @@ def revert_revision(revision_id: int, request: Request,
     revision = database.get_revision(revision_id)
     if not revision:
         raise HTTPException(status_code=404, detail="Deze wijziging bestaat niet")
-    item, _ = _item_for(user, revision["item_id"])
+    item, _ = _item_for(user, revision["item_id"], "edit")
     if not revision["changes"]:
         raise HTTPException(status_code=400,
                             detail="Bij deze regel staan geen veldwijzigingen om terug te draaien")
@@ -583,7 +607,7 @@ def revert_revision(revision_id: int, request: Request,
 @app.post("/api/items/{item_id}/relations")
 async def add_relation(item_id: str, request: Request,
                        user: dict = Depends(auth.current_user)):
-    item, _ = _item_for(user, item_id)
+    item, _ = _item_for(user, item_id, "edit")
     body = await request.json()
     other_id = (body.get("item_id") or "").strip()
     other, _ = _item_for(user, other_id)
@@ -609,7 +633,7 @@ def drop_relation(relation_id: str, request: Request,
     relation = database.get_relation(relation_id)
     if not relation:
         raise HTTPException(status_code=404, detail="Deze koppeling bestaat niet")
-    item, _ = _item_for(user, relation["a_id"])
+    item, _ = _item_for(user, relation["a_id"], "edit")
     database.unrelate(relation_id)
     database.audit("item.unrelate", user_email=user["email"], org_id=item["org_id"],
                    target=item["name"], ip=auth.client_ip(request))
@@ -640,11 +664,11 @@ def has_ports(item: dict) -> bool:
                                           or port_count(item) > 0)
 
 
-def _adapter_for(user: dict, adapter_id: str) -> tuple:
+def _adapter_for(user: dict, adapter_id: str, need: str = "read") -> tuple:
     adapter = database.get_adapter(adapter_id)
     if not adapter:
         raise HTTPException(status_code=404, detail="Deze netwerkadapter bestaat niet")
-    item, _ = _item_for(user, adapter["item_id"])
+    item, _ = _item_for(user, adapter["item_id"], need)
     return adapter, item
 
 
@@ -657,7 +681,7 @@ def item_adapters(item_id: str, user: dict = Depends(auth.current_user)):
 @app.post("/api/items/{item_id}/adapters")
 async def add_adapter(item_id: str, request: Request,
                       user: dict = Depends(auth.current_user)):
-    item, _ = _item_for(user, item_id)
+    item, _ = _item_for(user, item_id, "edit")
     if item["kind"] not in schema.adapter_kinds():
         raise HTTPException(status_code=400,
                             detail=f"Een {schema.kind(item['kind'])['label'].lower()} "
@@ -680,7 +704,7 @@ async def add_adapter(item_id: str, request: Request,
 @app.patch("/api/adapters/{adapter_id}")
 async def edit_adapter(adapter_id: str, request: Request,
                        user: dict = Depends(auth.current_user)):
-    adapter, item = _adapter_for(user, adapter_id)
+    adapter, item = _adapter_for(user, adapter_id, "edit")
     body = await request.json()
     values = {k: str(body.get(k) or "").strip() for k in database.ADAPTER_FIELDS if k in body}
     if adapter["source"] == "rmm":
@@ -697,7 +721,7 @@ async def edit_adapter(adapter_id: str, request: Request,
 @app.delete("/api/adapters/{adapter_id}")
 def remove_adapter(adapter_id: str, request: Request,
                    user: dict = Depends(auth.current_user)):
-    adapter, item = _adapter_for(user, adapter_id)
+    adapter, item = _adapter_for(user, adapter_id, "edit")
     if adapter["source"] == "rmm":
         raise HTTPException(status_code=400,
                             detail="Deze adapter komt uit de RMM en verdwijnt vanzelf "
@@ -722,7 +746,7 @@ def _where(adapter: dict, item: dict) -> str:
 @app.post("/api/adapters/{adapter_id}/connect")
 async def connect_adapter(adapter_id: str, request: Request,
                           user: dict = Depends(auth.current_user)):
-    adapter, item = _adapter_for(user, adapter_id)
+    adapter, item = _adapter_for(user, adapter_id, "edit")
     body = await request.json()
     switch, _ = _item_for(user, (body.get("switch_id") or "").strip())
     if switch["org_id"] != item["org_id"]:
@@ -764,7 +788,7 @@ async def connect_adapter(adapter_id: str, request: Request,
 @app.post("/api/adapters/{adapter_id}/disconnect")
 def disconnect_adapter(adapter_id: str, request: Request,
                        user: dict = Depends(auth.current_user)):
-    adapter, item = _adapter_for(user, adapter_id)
+    adapter, item = _adapter_for(user, adapter_id, "edit")
     was = database.port_of_adapter(adapter_id)
     if not was:
         return database.list_adapters(item["id"])
@@ -794,7 +818,7 @@ def switch_ports(item_id: str, user: dict = Depends(auth.current_user)):
 async def edit_port(item_id: str, number: int, request: Request,
                     user: dict = Depends(auth.current_user)):
     """A port's own label and VLAN, and unpatching from the switch's side."""
-    item, _ = _item_for(user, item_id)
+    item, _ = _item_for(user, item_id, "edit")
     if not has_ports(item):
         raise HTTPException(status_code=400, detail="Dit apparaat heeft geen poortenlijst")
     body = await request.json()
@@ -818,14 +842,14 @@ async def edit_port(item_id: str, number: int, request: Request,
 # -- except for the password itself, which lives encrypted in its own table and
 # leaves it one at a time, on purpose, with a line in the log each time.
 # --------------------------------------------------------------------------- #
-def _secret_field(user: dict, item_id: str, field: str) -> tuple:
+def _secret_field(user: dict, item_id: str, field: str, need: str = "reveal") -> tuple:
     """The item and the field a secret belongs to.
 
     A vault entry keeps its password under "main"; a type defined here can have
     several, each under its own field. Anything else has none at all, and says
     so rather than quietly storing something nobody will find again.
     """
-    item, org = _item_for(user, item_id)
+    item, org = _item_for(user, item_id, need)
     if field == "main":
         if item["kind"] != "password":
             raise HTTPException(status_code=400, detail="Dit item is geen wachtwoord")
@@ -846,7 +870,7 @@ def vault_state(user: dict = Depends(auth.current_user)):
 @app.put("/api/items/{item_id}/secret")
 async def set_secret(item_id: str, request: Request, field: str = "main",
                      user: dict = Depends(auth.current_user)):
-    item, _ = _secret_field(user, item_id, field)
+    item, _ = _secret_field(user, item_id, field, "edit")
     body = await request.json()
     password = body.get("password") or ""
     if not password:
@@ -878,7 +902,7 @@ def read_secret(item_id: str, request: Request, field: str = "main",
     log worth anything: every reading of every password is one line, with who
     and from where.
     """
-    item, _ = _secret_field(user, item_id, field)
+    item, _ = _secret_field(user, item_id, field, "reveal")
     record = database.get_secret(item_id, field)
     if not record:
         raise HTTPException(status_code=404, detail="Er staat nog geen wachtwoord in")

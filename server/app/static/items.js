@@ -390,6 +390,10 @@ window.DocItems = function (ctx) {
     let item = await api(`/api/items/${itemId}`);
     let all = await index(org.id);      // refreshed after a change, for the ref fields
     const spec = KINDS[item.kind];
+    // Decided by the server per customer (the role comes from the RMM); the
+    // page only leaves out what would be refused anyway.
+    const mayEdit = !org.may || org.may.edit;
+    const mayReveal = !org.may || org.may.reveal;
     let editing = false;
 
     const source = item.source === "rmm"
@@ -480,6 +484,10 @@ window.DocItems = function (ctx) {
 
     function wireHead() {
       const act = host.querySelector("#item-actions");
+      if (!mayEdit) {
+        act.innerHTML = `<span class="tag" title="Je rol bij deze klant in de RMM geeft alleen leesrechten">alleen lezen</span>`;
+        return;
+      }
       act.innerHTML = editing ? "" : `
         <button class="btn ghost sm" id="btn-edit">${ICON.pencil} Bewerken</button>
         <button class="btn ghost sm" id="btn-archive">${item.archived ? ICON.refresh + " Terugzetten" : ICON.box + " Afvoeren"}</button>`;
@@ -594,6 +602,16 @@ window.DocItems = function (ctx) {
 
       const paint = () => {
         const state = secretState(field);
+        if (!mayReveal) {
+          slot.innerHTML = `<div class="panel secret-panel">
+              <div class="panel-head"><h2>${esc(spec.label)}</h2></div>
+              <div class="secret-row"><span class="secret-val mono">${state.has_secret ? "••••••••••••" : "—"}</span>
+                <span class="tag">${ICON.lock} geen toegang</span></div>
+              <div class="secret-note">${state.has_secret ? "Er staat een wachtwoord in, maar" : "Hier kan een wachtwoord in, maar"}
+                je rol bij deze klant geeft geen toegang tot wachtwoorden. Dat wordt in de RMM geregeld.</div>
+            </div>`;
+          return;
+        }
         const changed = state.secret_updated_at
           ? `Laatst gewijzigd ${when(state.secret_updated_at)}${
               state.secret_updated_by ? ` door ${esc(state.secret_updated_by)}` : ""}`
@@ -981,7 +999,7 @@ window.DocItems = function (ctx) {
           <span class="rel-ic">${ICON[KINDS[r.kind] ? KINDS[r.kind].icon : "link"]}</span>
           <span class="rel-name">${esc(r.name)}</span>
           <small>${esc(KINDS[r.kind] ? KINDS[r.kind].label : r.kind)}</small>
-          <button class="btn ghost sm" data-unlink="${esc(r.relation_id)}">${ICON.trash}</button>
+          ${mayEdit ? `<button class="btn ghost sm" data-unlink="${esc(r.relation_id)}">${ICON.trash}</button>` : ""}
         </div>`).join("")
         : `<div class="muted" style="padding:14px 16px">Nog nergens aan gekoppeld.</div>`;
       const options = all.filter((i) => i.id !== item.id && !i.archived
@@ -990,7 +1008,7 @@ window.DocItems = function (ctx) {
           <div class="panel-head"><h2>Gerelateerd</h2>
             <span class="sub">Wat hier mee samenhangt</span></div>
           ${rows}
-          ${options.length ? `<div class="rel-add">
+          ${options.length && mayEdit ? `<div class="rel-add">
             <select class="inp" id="rel-pick"><option value="">Koppel aan…</option>
               ${options.map((o) => `<option value="${esc(o.id)}">${esc(KINDS[o.kind].label)}: ${esc(o.name)}</option>`).join("")}
             </select>

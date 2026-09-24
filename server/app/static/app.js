@@ -272,7 +272,14 @@
           </div>`).join("")}</div>
           ${due.length > 8 ? `<div class="muted" style="margin-top:8px">en nog ${due.length - 8}</div>` : ""}
         </div></div></div>` : "";
-    return dueBlock + `<div class="panel" style="padding:20px;margin-bottom:16px">
+    // Say it once, where you arrive, rather than letting buttons go missing
+    // without a word.
+    const readOnly = o.may && !o.may.edit ? `<div class="callout info" style="margin-bottom:16px">
+        <div class="ic">${ICON.eye}</div><div>
+        <div class="ct">Je hebt bij ${esc(o.name)} alleen leesrechten</div>
+        <div class="cd">Je kunt alles lezen, maar niets wijzigen en geen wachtwoorden inzien.
+          Dat volgt uit je rol bij deze klant in de RMM.</div></div></div>` : "";
+    return readOnly + dueBlock + `<div class="panel" style="padding:20px;margin-bottom:16px">
         <div class="org-head">
           <span class="mark" style="background:hsl(${h} 55% 45%)">${esc(initials)}
             ${o.rmm_org_id ? `<span class="oc-rmm" title="Gekoppeld aan de Leuffen RMM">${ICON.shield}</span>` : ""}</span>
@@ -390,10 +397,11 @@
       }
 
       if (tab.kinds) {
-        $("page-actions").innerHTML =
-          `<button class="btn sm" id="add-item">${ICON.plus} Toevoegen</button>`;
+        const mayEdit = !state.org.may || state.org.may.edit;
+        $("page-actions").innerHTML = mayEdit
+          ? `<button class="btn sm" id="add-item">${ICON.plus} Toevoegen</button>` : "";
         await Items.listView($("view"), state.org, tab);
-        $("add-item").onclick = () => Items.openCreate(state.org, tab, $("view"));
+        if (mayEdit) $("add-item").onclick = () => Items.openCreate(state.org, tab, $("view"));
         if (tab.id === "wachtwoorden" && state.me.is_admin) await showVaultKey();
         return;
       }

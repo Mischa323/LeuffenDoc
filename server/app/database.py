@@ -378,14 +378,25 @@ def upsert_user(email: str, display_name: str | None = None, is_admin: bool | No
     return get_user(email)  # type: ignore[return-value]
 
 
-def set_user_orgs(email: str, org_ids: list[str], role: str = "tech") -> None:
+def set_user_orgs(email: str, orgs: list, role: str = "member") -> None:
     """Replace someone's customer access in one go -- how a sync from the RMM
-    lands, so access removed there is removed here."""
+    lands, so access removed there is removed here.
+
+    `orgs` holds customer ids, or (id, role) pairs when the role differs per
+    customer -- which it does when it comes from the RMM.
+    """
     email = email.lower()
+    pairs = [o if isinstance(o, (tuple, list)) else (o, role) for o in orgs]
     with write() as conn:
         conn.execute("DELETE FROM org_users WHERE user_email=?", (email,))
         conn.executemany("INSERT OR IGNORE INTO org_users (org_id, user_email, role) VALUES (?, ?, ?)",
-                         [(oid, email, role) for oid in org_ids])
+                         [(oid, email, r or role) for oid, r in pairs])
+
+
+def user_role(email: str, org_id: str) -> str | None:
+    """Someone's role at one customer, or None if they have no access there."""
+    r = row("SELECT role FROM org_users WHERE user_email=? AND org_id=?", (email.lower(), org_id))
+    return r["role"] if r else None
 
 
 def user_orgs(email: str) -> list[dict]:

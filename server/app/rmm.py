@@ -110,12 +110,16 @@ def apply_identity(identity: dict, source: str = "rmm") -> dict:
                                 display_name=identity.get("display_name") or None,
                                 is_admin=bool(identity.get("is_global_admin")),
                                 source=source)
-    org_ids = []
+    # The role per customer comes along: a viewer there reads the
+    # documentation here but does not see passwords -- administered once, in
+    # the RMM, like the access itself.
+    orgs = []
     for org in identity.get("orgs") or []:
         if not org.get("id"):
             continue
-        org_ids.append(database.upsert_org(org.get("name") or org["id"], rmm_org_id=org["id"]))
-    database.set_user_orgs(email, org_ids)
+        orgs.append((database.upsert_org(org.get("name") or org["id"], rmm_org_id=org["id"]),
+                     org.get("role") or "member"))
+    database.set_user_orgs(email, orgs)
     return user
 
 
