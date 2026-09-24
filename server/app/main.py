@@ -23,7 +23,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, database, m365, rmm, schema, settings, vault
+from . import auth, database, m365, rmm, schema, settings, strength, vault
 
 log = logging.getLogger("leuffendoc")
 
@@ -448,6 +448,12 @@ def _decorate(item: dict, user: dict) -> dict:
         item.update(database.secret_state(item["id"]))
     if schema.secret_fields_of(item["kind"]):
         item["secrets"] = database.secret_fields(item["id"])
+    if not _may(user, item["org_id"])["reveal"]:
+        # How strong a password is says something about it. Only for whoever
+        # may read it anyway.
+        item.pop("secret_strength", None)
+        for state in (item.get("secrets") or {}).values():
+            state.pop("secret_strength", None)
     if item["kind"] in schema.adapter_kinds():
         item["adapters"] = database.list_adapters(item["id"])
     if has_ports(item):
@@ -503,7 +509,7 @@ async def create_org_item(org_id: str, request: Request,
                                 schema.clean(kind, body.get("fields") or {}),
                                 by=user["email"], label=_labeller(kind))
     if kind == "password" and body.get("password"):
-        database.put_secret(item["id"], vault.seal(body["password"]), by=user["email"])
+        database.put_secret(item["id"], _seal(body["password"]), by=user["email"])
         # The history should say a password was set here, the same as when one
         # is changed later -- otherwise the first one is the only change to a
         # vault entry that leaves no trace.
@@ -895,6 +901,17 @@ def vault_state(user: dict = Depends(auth.current_user)):
     return vault.state()
 
 
+def _seal(password: str) -> dict:
+    """Encrypt a password to store, judged on the way in: how strong it is,
+    and a fingerprint to find the same one elsewhere. Both are worked out here,
+    while the plain text is at hand, so the overview never has to open the
+    vault to draw up its lists."""
+    record = vault.seal(password)
+    record["strength"] = strength.rate(password)
+    record["fingerprint"] = vault.fingerprint(password)
+    return record
+
+
 @app.put("/api/items/{item_id}/secret")
 async def set_secret(item_id: str, request: Request, field: str = "main",
                      user: dict = Depends(auth.current_user)):
@@ -904,7 +921,7 @@ async def set_secret(item_id: str, request: Request, field: str = "main",
     if not password:
         raise HTTPException(status_code=400, detail="Er is geen wachtwoord opgegeven")
     had = database.secret_state(item_id, field)["has_secret"]
-    database.put_secret(item_id, vault.seal(password), by=user["email"], field=field)
+    database.put_secret(item_id, _seal(password), by=user["email"], field=field)
     # Links still open would go on handing out the old password -- which is
     # likely why it is being changed. They close with it.
     closed = database.revoke_open_shares(item_id, field, "het wachtwoord is gewijzigd")
@@ -1539,6 +1556,97 @@ def share_open(token: str, request: Request):
         "expires_at": fresh["expires_at"],
         "shared_by": share["created_by"],
     }, headers=SHARE_HEADERS)
+
+
+# --------------------------------------------------------------------------- #
+# The vault across customers
+#
+# For an administrator: which passwords are due, which have not changed in a
+# long time, which are weak, and which are the same as another one. Drawn up
+# from what was judged when each password was stored -- nothing is opened.
+# --------------------------------------------------------------------------- #
+def _vault_entry(r: dict, today, now: float) -> dict:
+    spec = schema.kind(r["kind"]) or {}
+    fields = json.loads(r["fields_json"] or "{}")
+    entry = {
+        "item_id": r["item_id"], "org_id": r["org_id"], "org_name": r["org_name"],
+        "name": r["name"], "kind": r["kind"], "kind_label": spec.get("label", r["kind"]),
+        "field": r["field_key"],
+        "field_label": "Wachtwoord" if r["field_key"] == "main"
+                       else schema.label_of(r["kind"], r["field_key"]),
+        "updated_at": r["updated_at"], "updated_by": r["updated_by"],
+        "age_days": int((now - r["updated_at"]) // 86400),
+        "strength": r["strength"], "rotate_at": None, "rotate_days": None,
+    }
+    if r["kind"] == "password" and r["field_key"] == "main" and fields.get("rotate_at"):
+        import datetime
+        try:
+            on = datetime.date.fromisoformat(str(fields["rotate_at"])[:10])
+            entry["rotate_at"] = on.isoformat()
+            entry["rotate_days"] = (on - today).days
+        except ValueError:
+            pass
+    return entry
+
+
+@app.get("/api/vault/overview")
+def vault_overview(user: dict = Depends(auth.current_user)):
+    auth.require_admin(user)
+    import datetime
+    now, today = time.time(), datetime.date.today()
+    max_age = int(settings.get("PW_MAX_AGE_DAYS"))
+    warn = int(settings.get("EXPIRY_WARN_DAYS"))
+    raw = database.vault_rows()
+    entries = [_vault_entry(r, today, now) for r in raw]
+
+    rotate = sorted((e for e in entries if e["rotate_days"] is not None and e["rotate_days"] <= warn),
+                    key=lambda e: e["rotate_days"])
+    old = sorted((e for e in entries if max_age and e["age_days"] >= max_age),
+                 key=lambda e: -e["age_days"])
+    weak = [e for e in entries if e["strength"] == strength.WEAK]
+
+    groups: dict[str, list] = {}
+    for r, e in zip(raw, entries):
+        if r["fingerprint"]:
+            groups.setdefault(r["fingerprint"], []).append(e)
+    # The fingerprint itself stays here: it is only good for comparing.
+    reused = [{"count": len(g), "customers": len({e["org_id"] for e in g}), "items": g}
+              for g in groups.values() if len(g) > 1]
+    reused.sort(key=lambda g: (-g["customers"], -g["count"]))
+
+    return {
+        "total": len(entries),
+        "unjudged": sum(1 for r in raw if not r["fingerprint"]),
+        "max_age_days": max_age, "warn_days": warn,
+        "grades": {"zwak": sum(1 for e in entries if e["strength"] == strength.WEAK),
+                   "matig": sum(1 for e in entries if e["strength"] == strength.FAIR),
+                   "sterk": sum(1 for e in entries if e["strength"] == strength.STRONG)},
+        "rotate": rotate, "old": old, "weak": weak, "reused": reused,
+        "key": vault.state(),
+    }
+
+
+@app.post("/api/vault/judge")
+def vault_judge(request: Request, user: dict = Depends(auth.current_user)):
+    """Judge the passwords stored before this was done on the way in. It opens
+    each one on the server, so it is an administrator's decision and in the
+    log -- as one line, since nothing leaves the server."""
+    auth.require_admin(user)
+    done = failed = 0
+    for record in database.unjudged_secrets():
+        try:
+            password = vault.unseal(record)
+        except Exception:
+            failed += 1
+            continue
+        database.judge_secret(record["item_id"], record["field_key"],
+                              strength.rate(password), vault.fingerprint(password))
+        done += 1
+    database.audit("vault.judge", user_email=user["email"],
+                   detail=f"{done} wachtwoord(en) beoordeeld"
+                          + (f", {failed} niet te openen" if failed else ""),
+                   ip=auth.client_ip(request))
+    return {"done": done, "failed": failed}
 
 
 # --------------------------------------------------------------------------- #

@@ -96,6 +96,17 @@ def unseal(record: dict) -> str:
     return AESGCM(data_key).decrypt(record["nonce"], record["ciphertext"], None).decode()
 
 
+def fingerprint(plaintext: str) -> str:
+    """The same password gives the same fingerprint, so one used in two places
+    can be found without opening either. Keyed with a key derived from the
+    master key: without that, a stolen database cannot be checked against a
+    list of common passwords by hashing the list."""
+    import hashlib
+    import hmac
+    key = hmac.new(master_key(), b"leuffendoc-fingerprint-v1", hashlib.sha256).digest()
+    return hmac.new(key, plaintext.encode(), hashlib.sha256).hexdigest()
+
+
 def state() -> dict:
     """Where the key lives, for the notice in the interface."""
     stored = bool(database.get_setting(KEY_SETTING))

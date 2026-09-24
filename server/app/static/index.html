@@ -290,6 +290,39 @@
     .share-row:not(.open) { opacity: .6; }
     .share-row .btn { margin-left: auto; }
     .share-row.more { opacity: 1; }
+
+    /* ---- the vault across customers ---- */
+    .tag.bad { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
+    .vault-sum { padding: 16px 20px; margin-bottom: 16px; }
+    .vs-line { display: flex; gap: 8px; align-items: baseline; font-size: 14px; }
+    .vault-grades { display: flex; height: 8px; border-radius: 99px; overflow: hidden;
+                    background: var(--surface-3); margin: 12px 0 10px; }
+    .vault-grades span { display: block; height: 100%; }
+    .vs-legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12.5px; color: var(--text-dim); }
+    .vs-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 6px; }
+    .g-ok { background: var(--good); } .g-mid { background: var(--warn); }
+    .g-bad { background: var(--bad); } .g-none { background: var(--text-faint); }
+    .vault-tiles { margin-bottom: 16px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+    .vault-tile { padding: 16px 18px; }
+    .vault-tile .oc-head { margin-bottom: 0; }
+    .vault-tile .oc-mark { background: var(--surface-3); color: var(--text-dim); }
+    .vault-tile .oc-mark svg { width: 18px; height: 18px; }
+    .vault-tile.bad .oc-mark { background: var(--bad-soft); color: var(--bad); }
+    .vault-tile.warn .oc-mark { background: color-mix(in srgb, var(--warn) 15%, transparent); color: var(--warn); }
+    .vault-tile h3 { font-size: 22px; line-height: 1.1; }
+    .vault-sec { margin-bottom: 16px; scroll-margin-top: 80px; }
+    .vault-row { display: flex; align-items: center; gap: 10px; padding: 10px 18px; font-size: 13px;
+                 border-top: 1px solid var(--border-soft); cursor: pointer; flex-wrap: wrap; }
+    .vault-row:hover { background: var(--surface-2); }
+    .vault-row .vr-org { color: var(--text-dim); min-width: 150px; }
+    .vault-row .vr-name { font-weight: 600; }
+    .vault-row .vr-end { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+    .vault-group + .vault-group { border-top: 1px solid var(--border); }
+    .vault-group .vg-head { padding: 12px 18px 8px; font-size: 12.5px; color: var(--text-dim); }
+    .vault-none { display: flex; align-items: center; gap: 8px; padding: 14px 18px; font-size: 13px;
+                  color: var(--text-dim); border-top: 1px solid var(--border-soft); }
+    .vault-none svg { width: 15px; height: 15px; color: var(--good); }
+    .secret-panel .panel-head .sx-grade { cursor: help; }
     .share-row.more .btn { margin-left: 0; }
   </style>
 </head>
@@ -333,6 +366,7 @@
   <script src="/items.js"></script>
   <script src="/types.js"></script>
   <script src="/settings.js"></script>
+  <script src="/vault.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

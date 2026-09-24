@@ -116,6 +116,22 @@ For the link to work for someone outside, two things:
   only reachable over a VPN, publish that one path; it needs no sign-in and
   hands out nothing without a valid link.
 
+## Kluis
+
+**Kluis**, for administrators, lists across every customer which passwords are
+due to be replaced, which are the same password in more than one place, which
+are weak, and which have not changed in `PW_MAX_AGE_DAYS` (a year by default,
+under **Instellingen**; 0 switches it off). It is drawn up without opening the
+vault: a grade and a fingerprint are stored with each password when it is
+saved. The fingerprint is an HMAC keyed from the vault's master key, so it is
+useless without that key.
+
+Passwords stored before this existed have neither, and are listed as not
+judged until an administrator presses **Nu beoordelen**. That opens each of
+them once on the server — nothing reaches the browser — and is one line in the
+log. After changing `DOC_SECRET_KEY` the fingerprints no longer match new ones,
+but by then the old passwords do not open either.
+
 ## Behind a reverse proxy
 
 TLS is terminated by the proxy, as with the RMM. The server needs three things

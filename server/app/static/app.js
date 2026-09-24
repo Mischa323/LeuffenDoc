@@ -21,6 +21,9 @@
   const GLOBAL = [
     { id: "klanten", label: "Klanten", icon: "building", title: "Klanten",
       sub: "Kies een klant om zijn documentatie te openen" },
+    { id: "kluis", label: "Kluis", icon: "key", title: "Kluis",
+      sub: "Wachtwoorden bij alle klanten: wat vervangen moet, wat zwak is, wat dubbel staat",
+      admin: true },
     { id: "types", label: "Documenttypes", icon: "layers", title: "Documenttypes",
       sub: "Zelf samengestelde types, voor al je klanten", admin: true },
     { id: "logboek", label: "Logboek", icon: "history", title: "Logboek",
@@ -116,6 +119,7 @@
   }
 
   const Settings = window.DocSettings({ api, esc, toast, reloadConfig });
+  const Vault = window.DocVault({ api, esc, toast, go: (hash) => go(hash) });
 
   // ---- theme (remembered per browser) ----
   // Sun and moon aren't in the shared icon set, and a theme switch that shows an
@@ -425,6 +429,7 @@
 
     if (tab.id === "logboek") { $("view").innerHTML = await auditView(); return; }
     if (tab.id === "instellingen") { await Settings.view($("view")); return; }
+    if (tab.id === "kluis") { await Vault.view($("view")); return; }
     if (tab.id === "types") {
       $("page-actions").innerHTML =
         `<button class="btn sm" id="new-type">${ICON.plus} Type toevoegen</button>`;

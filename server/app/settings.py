@@ -57,6 +57,8 @@ SPEC: dict[str, dict] = {
     "PW_EACH_CLASS": {"group": "wachtwoorden", "type": "bool", "default": True},
     "PW_REVEAL_SECONDS": {"group": "wachtwoorden", "type": "int", "default": 30,
                           "min": 5, "max": 600},
+    "PW_MAX_AGE_DAYS": {"group": "wachtwoorden", "type": "int", "default": 365,
+                        "min": 0, "max": 3650},
 }
 
 # Settings every signed-in person's browser needs, and nothing more: how to

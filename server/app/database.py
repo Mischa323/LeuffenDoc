@@ -190,6 +190,8 @@ CREATE TABLE IF NOT EXISTS secrets (
     key_version INTEGER NOT NULL DEFAULT 1,
     updated_at  REAL NOT NULL,
     updated_by  TEXT,
+    strength    INTEGER,     -- 0 zwak, 1 matig, 2 sterk; judged when stored
+    fingerprint TEXT,        -- keyed hash, to find the same password elsewhere
     PRIMARY KEY (item_id, field_key),
     FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
 );
@@ -299,6 +301,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
                        key_version, updated_at, updated_by FROM secrets_old;
             DROP TABLE secrets_old;
         """)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(secrets)")}
+    if "fingerprint" not in cols:
+        # Judged when a password is stored. Rows from before have neither
+        # until an administrator has them judged, from Kluis.
+        conn.execute("ALTER TABLE secrets ADD COLUMN strength INTEGER")
+        conn.execute("ALTER TABLE secrets ADD COLUMN fingerprint TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_secrets_fingerprint ON secrets(fingerprint)")
 
 
 def get_conn() -> sqlite3.Connection:
@@ -716,13 +725,16 @@ def put_secret(item_id: str, record: dict, by: str | None, field: str = "main") 
     with write() as conn:
         conn.execute(
             "INSERT INTO secrets (item_id, field_key, wrapped_key, wrap_nonce, nonce, ciphertext, "
-            "key_version, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "key_version, updated_at, updated_by, strength, fingerprint) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(item_id, field_key) DO UPDATE SET wrapped_key=excluded.wrapped_key, "
             "wrap_nonce=excluded.wrap_nonce, nonce=excluded.nonce, "
             "ciphertext=excluded.ciphertext, key_version=excluded.key_version, "
-            "updated_at=excluded.updated_at, updated_by=excluded.updated_by",
+            "updated_at=excluded.updated_at, updated_by=excluded.updated_by, "
+            "strength=excluded.strength, fingerprint=excluded.fingerprint",
             (item_id, field, record["wrapped_key"], record["wrap_nonce"], record["nonce"],
-             record["ciphertext"], record["key_version"], record["updated_at"], by))
+             record["ciphertext"], record["key_version"], record["updated_at"], by,
+             record.get("strength"), record.get("fingerprint")))
 
 
 def get_secret(item_id: str, field: str = "main") -> dict | None:
@@ -730,18 +742,39 @@ def get_secret(item_id: str, field: str = "main") -> dict | None:
 
 
 def secret_state(item_id: str, field: str = "main") -> dict:
-    r = row("SELECT updated_at, updated_by FROM secrets WHERE item_id=? AND field_key=?",
+    r = row("SELECT updated_at, updated_by, strength FROM secrets WHERE item_id=? AND field_key=?",
             (item_id, field))
     return {"has_secret": bool(r), "secret_updated_at": r["updated_at"] if r else None,
-            "secret_updated_by": r["updated_by"] if r else None}
+            "secret_updated_by": r["updated_by"] if r else None,
+            "secret_strength": r["strength"] if r else None}
 
 
 def secret_fields(item_id: str) -> dict:
     """Which fields of one item hold a secret, and when each last changed."""
     return {r["field_key"]: {"has_secret": True, "secret_updated_at": r["updated_at"],
-                             "secret_updated_by": r["updated_by"]}
-            for r in rows("SELECT field_key, updated_at, updated_by FROM secrets "
+                             "secret_updated_by": r["updated_by"],
+                             "secret_strength": r["strength"]}
+            for r in rows("SELECT field_key, updated_at, updated_by, strength FROM secrets "
                           "WHERE item_id=?", (item_id,))}
+
+
+def vault_rows() -> list:
+    """Every stored password in use, with where it lives -- never what it is."""
+    return rows(
+        "SELECT s.item_id, s.field_key, s.updated_at, s.updated_by, s.strength, s.fingerprint, "
+        "i.name, i.kind, i.org_id, i.fields_json, o.name AS org_name FROM secrets s "
+        "JOIN items i ON i.id = s.item_id JOIN organizations o ON o.id = i.org_id "
+        "WHERE i.archived = 0 ORDER BY o.name COLLATE NOCASE, i.name COLLATE NOCASE")
+
+
+def unjudged_secrets() -> list:
+    return rows("SELECT * FROM secrets WHERE fingerprint IS NULL")
+
+
+def judge_secret(item_id: str, field: str, strength: int, fingerprint: str) -> None:
+    with write() as conn:
+        conn.execute("UPDATE secrets SET strength=?, fingerprint=? WHERE item_id=? AND field_key=?",
+                     (strength, fingerprint, item_id, field))
 
 
 def drop_secret(item_id: str, field: str = "main") -> None:

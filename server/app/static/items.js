@@ -550,9 +550,21 @@ window.DocItems = function (ctx) {
     function secretState(field) {
       if (field === "main") {
         return { has_secret: item.has_secret, secret_updated_at: item.secret_updated_at,
-                 secret_updated_by: item.secret_updated_by };
+                 secret_updated_by: item.secret_updated_by, secret_strength: item.secret_strength };
       }
       return (item.secrets || {})[field] || { has_secret: false };
+    }
+
+    // How strong it was judged when stored. Absent for a password stored before
+    // that was done, and for someone who may not read it.
+    function gradeTag(grade) {
+      const grades = [
+        ["bad", "zwak", "Makkelijk te raden: te kort, te weinig variatie, of een bekend woord met cijfers erachter."],
+        ["", "matig", "Redelijk. Langer of gevarieerder maakt het sterk."],
+        ["ok", "sterk", "Lang en gevarieerd genoeg."],
+      ];
+      const g = grades[grade];
+      return g ? `<span class="tag ${g[0]} sx-grade" title="${esc(g[2])}">${g[1]}</span>` : "";
     }
 
     function drawSecret() {
@@ -738,6 +750,7 @@ window.DocItems = function (ctx) {
           : (spec.hint || "");
         slot.innerHTML = `<div class="panel secret-panel">
             <div class="panel-head"><h2>${esc(spec.label)}</h2>
+              ${state.has_secret ? gradeTag(state.secret_strength) : ""}
               <span class="sub">${esc(changed)}</span></div>
             ${state.has_secret ? `
               <div class="secret-row">

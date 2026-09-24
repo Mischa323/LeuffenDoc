@@ -114,11 +114,14 @@ window.DocSettings = function (ctx) {
   }
 
   function passwordBlock() {
-    return block("wachtwoorden", "Wachtwoorden", "Hoe de knop Genereer ze maakt",
+    return block("wachtwoorden", "Wachtwoorden", "Hoe de knop Genereer ze maakt, en wanneer ze aan vervanging toe zijn",
       `<div class="tf-grid">
          ${field("PW_LENGTH", "Lengte")}
          ${field("PW_REVEAL_SECONDS", "Zichtbaar na Tonen (seconden)", {
            hint: "Daarna staan er weer bolletjes.",
+         })}
+         ${field("PW_MAX_AGE_DAYS", "Vervangen na (dagen)", {
+           hint: "Langer niet gewijzigd en het staat onder <b>Kluis</b>. 0 is niet op leeftijd letten.",
          })}
        </div>
        <div class="pw-classes">
