@@ -13,9 +13,16 @@ with its own data volume.
 docker compose up -d      # http://localhost:8100
 ```
 
-Everything is configured through environment variables (see
-`docker-compose.yml`); settings saved in the app land in the database, and an
-explicit environment variable always wins over one of those.
+Most of it can be set under **Instellingen** in the app itself, by an
+administrator: the link with the RMM, Microsoft 365, the public address, how
+passwords are generated and how long one stays on screen, and when a date
+starts to warn. Those land in the database, and the two secrets among them
+(the RMM's API key, the Microsoft 365 client secret) are stored sealed with the
+vault's key. An environment variable always wins over a saved value, and the
+page shows such a value as fixed rather than letting you type into a field that
+is then ignored. What decides whether anyone can reach the page at all — the
+proxy, cookies, the bootstrap administrators — can only be set here, in the
+environment.
 
 | Variable | What it does |
 |---|---|
@@ -31,6 +38,35 @@ explicit environment variable always wins over one of those.
 | `DOC_TRUST_PROXY` | `1` behind a reverse proxy, so the audit log records the visitor rather than the proxy. `0` if the container is reachable directly. |
 | `DOC_PROXY_IPS` | The address(es) your proxy connects from. Forwarded headers are only believed from there. |
 | `DOC_DEV_LOGIN` | `1` allows a password-free sign-in. Development only; the first account to sign in becomes the administrator. |
+| `DOC_IMAGE` | The image an update from the page pulls. Defaults to the one the container runs, which is what you want. |
+
+### Updating from the page
+
+**Instellingen → Over deze server** can pull the newest image and restart
+LeuffenDoc on it, like the RMM does. It needs the Docker socket and an image
+from a registry:
+
+```yaml
+services:
+  leuffendoc:
+    image: ghcr.io/mischa323/leuffendoc:latest
+    volumes:
+      - leuffendoc-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+```
+
+A short-lived helper container does the swap, because a container cannot
+replace itself mid-request. It keeps your ports, volumes, networks, restart
+policy and the settings you gave the container — but takes the command,
+health check and built-in defaults from the **new** image, so a release that
+changes those is not silently run with the old ones. The previous version is
+only thrown away once the new one reports healthy; if it does not start, the
+previous one is put back and the page says so.
+
+Without the socket the page says updating is not possible there, and why.
+Mounting the socket gives the container control over Docker on that host, so
+only do it where that is acceptable — updating by pulling the image and
+recreating the container yourself works just as well.
 
 ## Signing in
 

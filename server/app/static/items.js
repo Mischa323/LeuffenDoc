@@ -13,6 +13,10 @@ window.DocItems = function (ctx) {
 
   const { api, esc, go, toast } = ctx;
   let KINDS = null;
+  // Set from Instellingen: how passwords are made, how long one stays on
+  // screen, and when a date starts to warn.
+  let CONFIG = {};
+  const setConfig = (cfg) => { CONFIG = cfg || {}; };
   const indexes = new Map();        // org id -> every item of that customer
 
   async function kinds(fresh) {
@@ -79,7 +83,7 @@ window.DocItems = function (ctx) {
     today.setHours(0, 0, 0, 0);
     const days = Math.round((on - today) / 86400000);
     if (days < 0) return { kind: "warn", text: "verlopen" };
-    if (days <= 60) return { kind: "warn", text: days === 0 ? "vandaag" : `nog ${days} ${days === 1 ? "dag" : "dagen"}` };
+    if (days <= (Number(CONFIG.EXPIRY_WARN_DAYS) || 60)) return { kind: "warn", text: days === 0 ? "vandaag" : `nog ${days} ${days === 1 ? "dag" : "dagen"}` };
     return null;
   }
 
@@ -211,14 +215,8 @@ window.DocItems = function (ctx) {
     return fields;
   }
 
-  /* No lookalikes: a password read off a screen and typed into a console
-     should not fail on I versus l. */
-  function generatedPassword(length) {
-    const alphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#%^&*-_=+";
-    const bytes = new Uint32Array(length);
-    crypto.getRandomValues(bytes);
-    return Array.from(bytes, (n) => alphabet[n % alphabet.length]).join("");
-  }
+  // Made to the rules under Instellingen (see password.js).
+  const generatedPassword = () => window.makePassword(CONFIG);
 
   // Long values (a document's text) are cut for the history, which is about
   // what changed and not about reading the whole thing again.
@@ -349,7 +347,7 @@ window.DocItems = function (ctx) {
       const picker = slot.querySelector("#new-kind");
       if (picker) picker.onchange = () => { kind = picker.value; const name = slot.querySelector("#new-name").value; draw(); slot.querySelector("#new-name").value = name; };
       const gen = slot.querySelector("#new-secret-gen");
-      if (gen) gen.onclick = () => { slot.querySelector("#new-secret").value = generatedPassword(20); };
+      if (gen) gen.onclick = () => { slot.querySelector("#new-secret").value = generatedPassword(); };
       slot.querySelector("#new-cancel").onclick = () => { slot.dataset.open = "0"; slot.innerHTML = ""; };
       slot.querySelector("#new-save").onclick = save;
       wireListFields(slot);
@@ -567,7 +565,7 @@ window.DocItems = function (ctx) {
 
     function wireSetForm(root, save) {
       root.querySelector(".sx-gen").onclick = () => {
-        root.querySelector(".sx-input").value = generatedPassword(20);
+        root.querySelector(".sx-input").value = generatedPassword();
       };
       root.querySelector(".sx-save").onclick = () => save(root.querySelector(".sx-input"));
     }
@@ -625,7 +623,8 @@ window.DocItems = function (ctx) {
             shown = (await api(`/api/items/${item.id}/secret${query}`)).password;
             // Back to dots by itself: a password left on a screen in an office
             // is the most ordinary way one gets out.
-            hideTimer = setTimeout(() => { shown = null; paint(); }, 30000);
+            hideTimer = setTimeout(() => { shown = null; paint(); },
+                                   (Number(CONFIG.PW_REVEAL_SECONDS) || 30) * 1000);
             paint();
           } catch (e) { toast(e.message); }
         };
@@ -1099,5 +1098,5 @@ window.DocItems = function (ctx) {
     try { return (await api(`/api/items/${itemId}`)).name; } catch (e) { return null; }
   }
 
-  return { kinds, index, forget, listView, detailView, openCreate, expiring, itemName };
+  return { kinds, index, forget, listView, detailView, openCreate, expiring, itemName, setConfig };
 };

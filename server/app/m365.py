@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 
-from . import database
+from . import database, settings
 
 SCOPES = ["User.Read"]
 
@@ -38,7 +38,7 @@ def _app():
     return msal.ConfidentialClientApplication(
         _setting("DOC_M365_CLIENT_ID"),
         authority=f"https://login.microsoftonline.com/{tenant}",
-        client_credential=_setting("DOC_M365_CLIENT_SECRET"))
+        client_credential=settings.secret("DOC_M365_CLIENT_SECRET"))
 
 
 def login_url(state: str) -> str:

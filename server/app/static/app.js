@@ -25,6 +25,8 @@
       sub: "Zelf samengestelde types, voor al je klanten", admin: true },
     { id: "logboek", label: "Logboek", icon: "history", title: "Logboek",
       sub: "Wie heeft wat bekeken en gewijzigd", admin: true },
+    { id: "instellingen", label: "Instellingen", icon: "gear", title: "Instellingen",
+      sub: "Wat je kunt wijzigen zonder de container aan te raken", admin: true },
   ];
 
   // Inside a customer. `kinds` names what a section lists; a section without it
@@ -106,6 +108,14 @@
 
   const Types = window.DocTypes({ api, esc, toast, kinds: Items.kinds,
                                   refresh: rebuildSections });
+
+  // Settings every browser follows; fetched again after they are saved, so
+  // the next Genereer already uses the new rules.
+  async function reloadConfig() {
+    try { Items.setConfig(await api("/api/config")); } catch (e) { /* defaults apply */ }
+  }
+
+  const Settings = window.DocSettings({ api, esc, toast, reloadConfig });
 
   // ---- theme (remembered per browser) ----
   // Sun and moon aren't in the shared icon set, and a theme switch that shows an
@@ -406,6 +416,7 @@
       ? `<button class="btn sm" id="add-org">${ICON.plus} Klant toevoegen</button>` : "";
 
     if (tab.id === "logboek") { $("view").innerHTML = await auditView(); return; }
+    if (tab.id === "instellingen") { await Settings.view($("view")); return; }
     if (tab.id === "types") {
       $("page-actions").innerHTML =
         `<button class="btn sm" id="new-type">${ICON.plus} Type toevoegen</button>`;
@@ -599,6 +610,7 @@
     state.me = await api("/api/me");
     state.orgs = await api("/api/orgs");
     KINDS = await rebuildSections();
+    await reloadConfig();
     wireSearch();
     const name = state.me.display_name || state.me.email.split("@")[0];
     $("user-name").textContent = name;

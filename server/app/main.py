@@ -22,7 +22,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, database, m365, rmm, schema, vault
+from . import auth, database, m365, rmm, schema, settings, vault
 
 log = logging.getLogger("leuffendoc")
 
@@ -42,28 +42,34 @@ def _version() -> str:
 VERSION = _version()
 
 
-SYNC_MINUTES = int(os.environ.get("DOC_SYNC_MINUTES", "15"))
-
-
 async def _sync_loop() -> None:
     """Keep accounts and customers in step with the RMM. A sign-in refreshes
     the person doing it; this is what catches everyone else -- someone who left,
-    or a customer that was renamed."""
+    or a customer that was renamed.
+
+    It runs whether or not the link is set up yet, and reads the interval each
+    round: both can now change on the settings page, and neither should need a
+    restart to take effect.
+    """
     while True:
-        try:
-            await asyncio.to_thread(rmm.sync)
-        except Exception as exc:                  # never let the loop die
-            log.warning("sync round failed: %r", exc)
-        await asyncio.sleep(max(60, SYNC_MINUTES * 60))
+        if rmm.configured():
+            try:
+                await asyncio.to_thread(rmm.sync)
+            except Exception as exc:              # never let the loop die
+                log.warning("sync round failed: %r", exc)
+        await asyncio.sleep(max(60, int(settings.get("DOC_SYNC_MINUTES")) * 60))
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     database.init_db()
-    task = asyncio.create_task(_sync_loop()) if rmm.configured() else None
+    # While this container's own image can still be looked up, note what it
+    # set -- an update needs that to carry over only what was chosen here.
+    from . import docker_update
+    asyncio.create_task(asyncio.to_thread(docker_update.remember_own_image))
+    task = asyncio.create_task(_sync_loop())
     yield
-    if task:
-        task.cancel()
+    task.cancel()
 
 
 app = FastAPI(title="LeuffenDoc", version=VERSION, lifespan=lifespan)
@@ -101,7 +107,7 @@ def public_url(path: str = "") -> str:
     anything built from it would send people to an address that doesn't work --
     which is exactly what breaks a sign-in redirect.
     """
-    base = (os.environ.get("DOC_PUBLIC_URL") or database.get_setting("DOC_PUBLIC_URL") or "").rstrip("/")
+    base = (settings.get("DOC_PUBLIC_URL") or "").rstrip("/")
     return f"{base}{path}" if base else path
 
 
@@ -318,7 +324,7 @@ def rmm_status(user: dict = Depends(auth.current_user)):
     """Whether the RMM link is set up, and how the last sync went."""
     auth.require_admin(user)
     return {"configured": rmm.configured(), "url": rmm.base_url() or None,
-            "every_minutes": SYNC_MINUTES, **rmm.last_sync}
+            "every_minutes": settings.get("DOC_SYNC_MINUTES"), **rmm.last_sync}
 
 
 @app.post("/api/rmm/sync")
@@ -1121,6 +1127,158 @@ def remove_type(type_id: str, request: Request,
     database.audit("type.delete", user_email=user["email"], target=existing["label"],
                    ip=auth.client_ip(request))
     return {"status": "ok"}
+
+
+# --------------------------------------------------------------------------- #
+# Settings, and updating this server
+#
+# What an administrator can change without touching the container: the link
+# with the RMM, Microsoft 365, the public address, how passwords are generated
+# and how long one stays on screen, and when a date starts to warn. What decides
+# whether anyone can reach this page at all -- the proxy, cookies, the port, the
+# bootstrap administrators -- stays in the environment and is only shown here,
+# because changing it from here could lock the door behind you.
+# --------------------------------------------------------------------------- #
+@app.get("/api/config")
+def ui_config(user: dict = Depends(auth.current_user)):
+    """What every signed-in browser needs to know: how to make a password, how
+    long to show one, and when a date starts to warn."""
+    return settings.public()
+
+
+def _environment() -> dict:
+    """The settings that stay in the container's hands, for display only."""
+    return {
+        "DOC_TRUST_PROXY": auth.trust_proxy(),
+        "DOC_PROXY_IPS": os.environ.get("DOC_PROXY_IPS", "*"),
+        "DOC_SECURE_COOKIES": os.environ.get("DOC_SECURE_COOKIES", "1") not in ("0", "false", "no"),
+        "DOC_DEV_LOGIN": dev_login_enabled(),
+        "DOC_BOOTSTRAP_ADMIN": sorted(auth.bootstrap_admins()),
+        "DOC_SESSION_DAYS": auth.SESSION_DAYS,
+    }
+
+
+@app.get("/api/admin/settings")
+def admin_settings(user: dict = Depends(auth.current_user)):
+    auth.require_admin(user)
+    return {"settings": settings.describe(), "environment": _environment(),
+            "vault": vault.state(), "version": VERSION,
+            "m365_redirect": m365.redirect_uri()}
+
+
+def _check_settings(pending: dict) -> None:
+    """Refuse a combination that would leave something broken, before any of
+    it is written."""
+    for key, value in pending.items():
+        spec = settings.SPEC[key]
+        if spec["type"] == "url" and value and not str(value).startswith(("http://", "https://")):
+            raise HTTPException(status_code=400,
+                                detail=f"{key} moet met http:// of https:// beginnen")
+        if spec["type"] == "int":
+            try:
+                number = int(str(value).strip())
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"{key} moet een getal zijn")
+            if not spec.get("min", number) <= number <= spec.get("max", number):
+                raise HTTPException(status_code=400,
+                                    detail=f"{key} moet tussen {spec['min']} en {spec['max']} liggen")
+
+    # The generator as a whole, with what is being saved laid over what is set.
+    merged = {k: settings.get(k) for k in settings.SPEC if k.startswith("PW_")}
+    merged.update({k: settings._coerce(k, v) for k, v in pending.items() if k.startswith("PW_")})
+    classes = [k for k in ("PW_LOWER", "PW_UPPER", "PW_DIGITS", "PW_SYMBOLS") if merged[k]]
+    if not classes:
+        raise HTTPException(status_code=400,
+                            detail="Kies minstens één soort teken voor de generator")
+    if merged["PW_SYMBOLS"] and not str(merged["PW_SYMBOL_SET"]).strip():
+        raise HTTPException(status_code=400,
+                            detail="Leestekens staan aan, maar er zijn er geen opgegeven")
+    if merged["PW_EACH_CLASS"] and merged["PW_LENGTH"] < len(classes):
+        raise HTTPException(status_code=400,
+                            detail=f"Met {len(classes)} verplichte soorten tekens moet een "
+                                   f"wachtwoord minstens {len(classes)} lang zijn")
+
+
+@app.put("/api/admin/settings")
+async def save_admin_settings(request: Request, user: dict = Depends(auth.current_user)):
+    auth.require_admin(user)
+    body = await request.json()
+    clear = set(body.pop("clear", None) or [])
+    unknown = [k for k in list(body) + list(clear) if k not in settings.SPEC]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Onbekende instelling: {unknown[0]}")
+    fixed = [k for k in list(body) + list(clear) if settings.from_environment(k)]
+    if fixed:
+        raise HTTPException(status_code=409,
+                            detail=f"{fixed[0]} staat vast in de omgeving van de container "
+                                   "en kan hier niet worden gewijzigd")
+    # An empty secret in the form means "leave it", not "wipe it": the page
+    # never receives the value, so it cannot send it back.
+    pending = {k: v for k, v in body.items()
+               if not (settings.SPEC[k]["type"] == "secret" and not v)}
+    _check_settings(pending)
+
+    for key, value in pending.items():
+        settings.put(key, value)
+    for key in clear:
+        settings.put(key, "")
+    changed = sorted(set(pending) | clear)
+    if changed:
+        database.audit("settings.update", user_email=user["email"],
+                       detail=", ".join(changed), ip=auth.client_ip(request))
+    # A freshly configured link should show that it works, not in a quarter of
+    # an hour.
+    if any(k.startswith("DOC_RMM_") for k in changed) and rmm.configured():
+        asyncio.create_task(asyncio.to_thread(rmm.sync))
+    return {"saved": changed, "settings": settings.describe()}
+
+
+@app.post("/api/admin/rmm-test")
+def test_rmm(user: dict = Depends(auth.current_user)):
+    """Try the link with what is saved now, and say plainly which part fails."""
+    auth.require_admin(user)
+    if not rmm.configured():
+        return {"ok": False, "detail": "Vul eerst het adres en de API-sleutel in"}
+    try:
+        orgs = rmm.fetch_orgs()
+    except Exception as exc:
+        return {"ok": False, "detail": rmm._explain(exc)}
+    return {"ok": True, "detail": f"Verbonden: de RMM kent {len(orgs)} "
+                                  f"{'klant' if len(orgs) == 1 else 'klanten'}"}
+
+
+@app.get("/api/admin/update")
+def update_status(user: dict = Depends(auth.current_user)):
+    auth.require_admin(user)
+    from . import docker_update
+    return {"version": VERSION, **docker_update.status()}
+
+
+@app.post("/api/admin/update/check")
+def update_check(request: Request, user: dict = Depends(auth.current_user)):
+    auth.require_admin(user)
+    from . import docker_update
+    try:
+        return {"version": VERSION, **docker_update.check()}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Controleren lukte niet: {exc}")
+
+
+@app.post("/api/admin/update/apply")
+def update_apply(request: Request, user: dict = Depends(auth.current_user)):
+    auth.require_admin(user)
+    from . import docker_update
+    if not docker_update.available():
+        raise HTTPException(status_code=409,
+                            detail="Bijwerken vanuit de pagina kan hier niet: de Docker-socket "
+                                   "is niet aan deze container gekoppeld")
+    try:
+        result = docker_update.start()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Bijwerken lukte niet: {exc}")
+    database.audit("server.update", user_email=user["email"],
+                   detail=f"van {VERSION}", ip=auth.client_ip(request))
+    return {"version": VERSION, **result}
 
 
 # --------------------------------------------------------------------------- #

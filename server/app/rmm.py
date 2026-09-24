@@ -22,7 +22,7 @@ import urllib.parse
 
 import httpx
 
-from . import database, schema
+from . import database, schema, settings
 
 log = logging.getLogger("leuffendoc.rmm")
 
@@ -50,7 +50,8 @@ def public_base_url() -> str:
 
 
 def api_key() -> str:
-    return _setting("DOC_RMM_API_KEY")
+    # Stored sealed when it was entered on the settings page.
+    return settings.secret("DOC_RMM_API_KEY")
 
 
 def configured() -> bool:
