@@ -22,11 +22,17 @@ the database, joining the ones below.
 """
 from __future__ import annotations
 
+import re
+
+from . import database
+
 # Field types the interface knows how to render:
 #   text, textarea, number, date, select, mac, ip, bool, ref, list
 # A `ref` field holds the id of another item, of the kind named in `ref`.
 # A `list` field holds several labelled values -- [{"label": "Mobiel",
 # "value": "06-..."}] -- because one phone number per person is a fiction.
+# A `secret` field is encrypted and never travels with the item (see vault.py);
+# only a type you define yourself can have one, and it may have several.
 
 # Not "afgevoerd": equipment that is out of use is archived, and one fact
 # belongs in one place.
@@ -308,7 +314,10 @@ DOCUMENT = {
     ],
 }
 
-KINDS: dict[str, dict] = {
+# Everything above is built in. Types people define themselves live in the
+# database and join these at run time -- same shape, same rendering, so nothing
+# downstream can tell the difference.
+BUILT_IN: dict[str, dict] = {
     "computer": COMPUTER,
     "network": NETWORK,
     "printer": PRINTER,
@@ -319,19 +328,85 @@ KINDS: dict[str, dict] = {
     "document": DOCUMENT,
 }
 
+# Field types somebody may pick when defining a type of their own. Not `ref`
+# without a target, and not the RMM-backed ones: those only mean something for
+# a kind the RMM actually reports.
+CUSTOM_FIELD_TYPES = ["text", "textarea", "number", "date", "select", "bool",
+                      "ip", "mac", "list", "secret", "ref"]
+
+_custom: dict | None = None
+
+
+def forget_custom() -> None:
+    """Drop the cached definitions after one is written."""
+    global _custom
+    _custom = None
+
+
+def _as_spec(row: dict) -> dict:
+    """One stored definition in the shape the built-in ones have.
+
+    A type made here has a single group: naming sections is one more thing to
+    explain for very little, and the page reads fine with one.
+    """
+    return {
+        "label": row["label"], "plural": row["plural"],
+        "icon": row.get("icon") or "layers",
+        "family": "eigen",
+        "sub": row.get("sub") or "",
+        "backref": row.get("backref") or "Wat hiernaar verwijst",
+        "columns": row.get("columns") or [],
+        "custom": True,
+        "adapters": bool(row.get("adapters")),
+        "groups": [{"key": "gegevens", "label": "Gegevens",
+                    "fields": row.get("fields") or []}],
+    }
+
+
+def custom() -> dict:
+    global _custom
+    if _custom is None:
+        try:
+            _custom = {t["id"]: _as_spec(t) for t in database.list_item_types()}
+        except Exception:                      # before the database exists
+            return {}
+    return _custom
+
+
+def KINDS_all() -> dict:
+    return {**BUILT_IN, **custom()}
+
+
+def slug(label: str) -> str:
+    """A readable id from a label: "Microsoft 365-tenant" -> "microsoft-365-tenant"."""
+    text = (label or "").strip().lower()
+    text = text.replace("&", " en ")
+    text = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+    return text[:40] or "type"
+
+
+def adapter_kinds() -> set:
+    """Which kinds carry network adapters -- equipment, plus any type whose
+    maker ticked the box."""
+    return ADAPTER_KINDS | {name for name, spec in custom().items() if spec.get("adapters")}
+
+
+def secret_fields_of(name: str) -> list:
+    return [f["key"] for f in fields_of(name).values() if f["type"] == "secret"]
+
 # Equipment carries network adapters; an internet connection or a contact does
 # not, so the interface only offers them where they mean something.
 ADAPTER_KINDS = {"computer", "network", "printer"}
 
 
 def kind(name: str) -> dict | None:
-    return KINDS.get(name)
+    return KINDS_all().get(name)
 
 
 def fields_of(name: str) -> dict[str, dict]:
     """Every field of a kind, keyed, with its group folded in."""
     out: dict[str, dict] = {}
-    for group in KINDS.get(name, {}).get("groups", []):
+    for group in KINDS_all().get(name, {}).get("groups", []):
         for field in group["fields"]:
             out[field["key"]] = {**field, "group": group["key"]}
     return out
@@ -339,14 +414,15 @@ def fields_of(name: str) -> dict[str, dict]:
 
 def catalogue() -> dict:
     """The whole thing, as the interface receives it."""
-    return {name: {**spec, "adapters": name in ADAPTER_KINDS}
-            for name, spec in KINDS.items()}
+    kinds = adapter_kinds()
+    return {name: {**spec, "adapters": name in kinds}
+            for name, spec in KINDS_all().items()}
 
 
 def ref_fields() -> dict:
     """Per kind, the fields that hold a reference to another item."""
     return {name: [f for f in fields_of(name).values() if f["type"] == "ref"]
-            for name in KINDS}
+            for name in KINDS_all()}
 
 
 def clean(name: str, values: dict) -> dict:
@@ -361,6 +437,10 @@ def clean(name: str, values: dict) -> dict:
     for key, value in (values or {}).items():
         spec = known.get(key)
         if not spec or spec.get("rmm"):
+            continue
+        # A secret is never a field value: it does not travel with the item and
+        # it does not go into the history, so a form cannot set one this way.
+        if spec["type"] == "secret":
             continue
         if value is None:
             continue
@@ -414,7 +494,7 @@ def clean_form(name: str, values: dict) -> dict:
     known = fields_of(name)
     for key, value in (values or {}).items():
         spec = known.get(key)
-        if spec and not spec.get("rmm") and key not in out:
+        if spec and not spec.get("rmm") and spec["type"] != "secret" and key not in out:
             out[key] = ""
     return out
 

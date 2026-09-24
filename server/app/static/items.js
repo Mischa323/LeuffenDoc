@@ -15,7 +15,8 @@ window.DocItems = function (ctx) {
   let KINDS = null;
   const indexes = new Map();        // org id -> every item of that customer
 
-  async function kinds() {
+  async function kinds(fresh) {
+    if (fresh) KINDS = null;
     if (!KINDS) KINDS = await api("/api/kinds");
     return KINDS;
   }
@@ -109,6 +110,10 @@ window.DocItems = function (ctx) {
           <div class="lrows">${rows.map((r) => listRow(r, listId)).join("")}</div>
           <button type="button" class="btn ghost sm lf-add">${ICON.plus} Nog een</button>
         </div>`;
+    }
+    if (field.type === "secret") {
+      return `<div class="rmm-val"><span class="muted">Wordt versleuteld bewaard en
+        hieronder ingesteld, niet in dit formulier.</span></div>`;
     }
     if (field.type === "textarea") {
       return `<textarea class="inp${field.long ? " longtext-input" : ""}" id="${id}"
@@ -466,7 +471,7 @@ window.DocItems = function (ctx) {
         host.querySelectorAll("[data-goto]").forEach((a) => {
           a.onclick = () => go(`#/klant/${org.id}/item/${a.dataset.goto}`);
         });
-        await drawSecret();
+        drawSecret();
         drawAdapters();
         drawPorts();
         drawReferredBy();
@@ -518,62 +523,106 @@ window.DocItems = function (ctx) {
     /* The password itself. It is not a field: it never travels with the rest
        of the page, it is asked for one at a time, and every reading is a line
        in the log — which is the whole reason the log is worth reading. */
-    function setForm(id, buttonText) {
+    /* Which secrets this item has. A vault entry keeps one under "main"; a
+       type defined here can have several, each on its own field -- a tenant
+       with an administrator password and a break-glass account, say. */
+    function secretSlots() {
+      const out = item.kind === "password" ? [{ field: "main", label: "Wachtwoord" }] : [];
+      for (const f of fieldsOf(item.kind)) {
+        if (f.type === "secret") out.push({ field: f.key, label: f.label, hint: f.hint });
+      }
+      return out;
+    }
+
+    function secretState(field) {
+      if (field === "main") {
+        return { has_secret: item.has_secret, secret_updated_at: item.secret_updated_at,
+                 secret_updated_by: item.secret_updated_by };
+      }
+      return (item.secrets || {})[field] || { has_secret: false };
+    }
+
+    function drawSecret() {
+      const slot = host.querySelector("#secret");
+      if (!slot) return;
+      const slots = secretSlots();
+      if (!slots.length) { slot.innerHTML = ""; return; }
+      slot.innerHTML = slots.map((s) => `<div data-secret="${esc(s.field)}"></div>`).join("");
+      slots.forEach((s) =>
+        drawOneSecret(slot.querySelector(`[data-secret="${CSS.escape(s.field)}"]`), s));
+    }
+
+    /* One panel per secret. A page can carry several -- a tenant with an
+       administrator password and a break-glass account -- so everything in
+       here is found by class within its own panel rather than by id, which
+       two panels would share. */
+    function setForm(buttonText) {
       return `<div class="plug-row">
-          <input class="inp mono" id="${id}" type="text" autocomplete="new-password"
+          <input class="inp mono sx-input" type="text" autocomplete="new-password"
                  placeholder="Wachtwoord" style="flex:1;min-width:220px" />
-          <button class="btn ghost sm" id="${id}-gen">${ICON.refresh} Genereer</button>
-          <button class="btn sm" id="${id}-save">${ICON.save} ${buttonText}</button>
+          <button type="button" class="btn ghost sm sx-gen">${ICON.refresh} Genereer</button>
+          <button type="button" class="btn sm sx-save">${ICON.save} ${buttonText}</button>
         </div>`;
     }
 
-    function wireGenerate(root, id) {
-      root.querySelector(`#${id}-gen`).onclick = () => {
-        root.querySelector(`#${id}`).value = generatedPassword(20);
-        root.querySelector(`#${id}`).type = "text";
+    function wireSetForm(root, save) {
+      root.querySelector(".sx-gen").onclick = () => {
+        root.querySelector(".sx-input").value = generatedPassword(20);
       };
+      root.querySelector(".sx-save").onclick = () => save(root.querySelector(".sx-input"));
     }
 
-    async function drawSecret() {
-      const slot = host.querySelector("#secret");
+    function drawOneSecret(slot, spec) {
       if (!slot) return;
-      if (item.kind !== "password") { slot.innerHTML = ""; return; }
+      const field = spec.field;
+      const query = field === "main" ? "" : `?field=${encodeURIComponent(field)}`;
       let shown = null;
       let hideTimer = null;
 
+      const save = async (input) => {
+        const value = input.value;
+        if (!value) { toast("Vul eerst een wachtwoord in"); input.focus(); return; }
+        try {
+          await api(`/api/items/${item.id}/secret${query}`, {
+            method: "PUT", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ password: value }),
+          });
+          item = await api(`/api/items/${item.id}`);
+          shown = null;
+          toast(`${spec.label} opgeslagen`);
+          draw();
+        } catch (e) { toast(e.message); }
+      };
+
       const paint = () => {
-        const changed = item.secret_updated_at
-          ? `Laatst gewijzigd ${when(item.secret_updated_at)}${
-              item.secret_updated_by ? ` door ${esc(item.secret_updated_by)}` : ""}`
-          : "";
+        const state = secretState(field);
+        const changed = state.secret_updated_at
+          ? `Laatst gewijzigd ${when(state.secret_updated_at)}${
+              state.secret_updated_by ? ` door ${esc(state.secret_updated_by)}` : ""}`
+          : (spec.hint || "");
         slot.innerHTML = `<div class="panel secret-panel">
-            <div class="panel-head"><h2>Wachtwoord</h2>
+            <div class="panel-head"><h2>${esc(spec.label)}</h2>
               <span class="sub">${esc(changed)}</span></div>
-            ${item.has_secret ? `
+            ${state.has_secret ? `
               <div class="secret-row">
-                <span class="secret-val mono" id="secret-val">${shown ? esc(shown) : "••••••••••••"}</span>
-                <button class="btn ghost sm" id="secret-show">${shown ? ICON.eyeOff : ICON.eye} ${shown ? "Verberg" : "Tonen"}</button>
-                <button class="btn ghost sm" id="secret-copy">${ICON.copy} Kopiëren</button>
-                <button class="btn ghost sm" id="secret-edit">${ICON.pencil} Wijzigen</button>
+                <span class="secret-val mono sx-val">${shown ? esc(shown) : "••••••••••••"}</span>
+                <button type="button" class="btn ghost sm sx-show">${shown ? ICON.eyeOff : ICON.eye} ${shown ? "Verberg" : "Tonen"}</button>
+                <button type="button" class="btn ghost sm sx-copy">${ICON.copy} Kopiëren</button>
+                <button type="button" class="btn ghost sm sx-edit">${ICON.pencil} Wijzigen</button>
               </div>
-              <div class="secret-note">Elke keer dat dit wachtwoord getoond of gekopieerd
-                wordt, komt dat in het logboek te staan.</div>
-              <div id="secret-form"></div>`
-            : `<div class="secret-row">
-                 <span class="muted">Er staat nog geen wachtwoord in.</span></div>
-               <div class="cb-pad">${setForm("secret-new", "Opslaan")}</div>`}
+              <div class="secret-note">Elke keer dat dit getoond of gekopieerd wordt,
+                komt dat in het logboek te staan.</div>
+              <div class="sx-form"></div>`
+            : `<div class="secret-row"><span class="muted">Er staat nog niets in.</span></div>
+               <div class="cb-pad">${setForm("Opslaan")}</div>`}
           </div>`;
 
-        if (!item.has_secret) {
-          wireGenerate(slot, "secret-new");
-          slot.querySelector("#secret-new-save").onclick = () => save("secret-new");
-          return;
-        }
+        if (!state.has_secret) { wireSetForm(slot, save); return; }
 
-        slot.querySelector("#secret-show").onclick = async () => {
+        slot.querySelector(".sx-show").onclick = async () => {
           if (shown) { shown = null; clearTimeout(hideTimer); paint(); return; }
           try {
-            shown = (await api(`/api/items/${item.id}/secret`)).password;
+            shown = (await api(`/api/items/${item.id}/secret${query}`)).password;
             // Back to dots by itself: a password left on a screen in an office
             // is the most ordinary way one gets out.
             hideTimer = setTimeout(() => { shown = null; paint(); }, 30000);
@@ -581,47 +630,30 @@ window.DocItems = function (ctx) {
           } catch (e) { toast(e.message); }
         };
 
-        slot.querySelector("#secret-copy").onclick = async () => {
+        slot.querySelector(".sx-copy").onclick = async () => {
           try {
-            const value = shown || (await api(`/api/items/${item.id}/secret`)).password;
+            const value = shown || (await api(`/api/items/${item.id}/secret${query}`)).password;
             await navigator.clipboard.writeText(value);
             toast("Gekopieerd");
           } catch (e) {
             // Without https the browser refuses the clipboard. Show it instead
             // of failing silently, and say why.
             try {
-              shown = (await api(`/api/items/${item.id}/secret`)).password;
+              shown = (await api(`/api/items/${item.id}/secret${query}`)).password;
               paint();
               toast("Kopiëren mag niet in deze browser — hier is hij");
             } catch (inner) { toast(inner.message); }
           }
         };
 
-        slot.querySelector("#secret-edit").onclick = () => {
-          const box = slot.querySelector("#secret-form");
+        slot.querySelector(".sx-edit").onclick = () => {
+          const box = slot.querySelector(".sx-form");
           if (box.dataset.open === "1") { box.dataset.open = "0"; box.innerHTML = ""; return; }
           box.dataset.open = "1";
-          box.innerHTML = `<div class="cb-pad">${setForm("secret-set", "Vervangen")}</div>`;
-          wireGenerate(box, "secret-set");
-          box.querySelector("#secret-set-save").onclick = () => save("secret-set");
-          box.querySelector("#secret-set").focus();
+          box.innerHTML = `<div class="cb-pad">${setForm("Vervangen")}</div>`;
+          wireSetForm(box, save);
+          box.querySelector(".sx-input").focus();
         };
-      };
-
-      const save = async (id) => {
-        const field = slot.querySelector(`#${id}`);
-        const value = field.value;
-        if (!value) { toast("Vul eerst een wachtwoord in"); field.focus(); return; }
-        try {
-          await api(`/api/items/${item.id}/secret`, {
-            method: "PUT", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ password: value }),
-          });
-          item = await api(`/api/items/${item.id}`);
-          shown = null;
-          toast("Wachtwoord opgeslagen");
-          draw();
-        } catch (e) { toast(e.message); }
       };
 
       paint();

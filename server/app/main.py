@@ -12,6 +12,7 @@ foundation.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import secrets
@@ -398,7 +399,9 @@ def _decorate(item: dict) -> dict:
     item["referred_by"] = _referred_by(item)
     if item["kind"] == "password":
         item.update(database.secret_state(item["id"]))
-    if item["kind"] in schema.ADAPTER_KINDS:
+    if schema.secret_fields_of(item["kind"]):
+        item["secrets"] = database.secret_fields(item["id"])
+    if item["kind"] in schema.adapter_kinds():
         item["adapters"] = database.list_adapters(item["id"])
     if has_ports(item):
         item["ports"] = database.ports_of(item["id"], port_count(item))
@@ -453,7 +456,7 @@ async def create_org_item(org_id: str, request: Request,
                        target=name, ip=auth.client_ip(request))
         item = database.get_item(item["id"])
     database.audit("item.create", user_email=user["email"], org_id=org_id,
-                   target=name, detail=schema.KINDS[kind]["label"],
+                   target=name, detail=schema.kind(kind)["label"],
                    ip=auth.client_ip(request))
     return _decorate(item)
 
@@ -649,9 +652,9 @@ def item_adapters(item_id: str, user: dict = Depends(auth.current_user)):
 async def add_adapter(item_id: str, request: Request,
                       user: dict = Depends(auth.current_user)):
     item, _ = _item_for(user, item_id)
-    if item["kind"] not in schema.ADAPTER_KINDS:
+    if item["kind"] not in schema.adapter_kinds():
         raise HTTPException(status_code=400,
-                            detail=f"Een {schema.KINDS[item['kind']]['label'].lower()} "
+                            detail=f"Een {schema.kind(item['kind'])['label'].lower()} "
                                    "heeft geen netwerkadapters")
     body = await request.json()
     values = {k: (str(body.get(k) or "").strip()) for k in database.ADAPTER_FIELDS}
@@ -809,10 +812,20 @@ async def edit_port(item_id: str, number: int, request: Request,
 # -- except for the password itself, which lives encrypted in its own table and
 # leaves it one at a time, on purpose, with a line in the log each time.
 # --------------------------------------------------------------------------- #
-def _password_item(user: dict, item_id: str) -> tuple:
+def _secret_field(user: dict, item_id: str, field: str) -> tuple:
+    """The item and the field a secret belongs to.
+
+    A vault entry keeps its password under "main"; a type defined here can have
+    several, each under its own field. Anything else has none at all, and says
+    so rather than quietly storing something nobody will find again.
+    """
     item, org = _item_for(user, item_id)
-    if item["kind"] != "password":
-        raise HTTPException(status_code=400, detail="Dit item is geen wachtwoord")
+    if field == "main":
+        if item["kind"] != "password":
+            raise HTTPException(status_code=400, detail="Dit item is geen wachtwoord")
+    elif field not in schema.secret_fields_of(item["kind"]):
+        raise HTTPException(status_code=400,
+                            detail=f"Dit item heeft geen wachtwoordveld “{field}”")
     return item, org
 
 
@@ -825,28 +838,33 @@ def vault_state(user: dict = Depends(auth.current_user)):
 
 
 @app.put("/api/items/{item_id}/secret")
-async def set_secret(item_id: str, request: Request,
+async def set_secret(item_id: str, request: Request, field: str = "main",
                      user: dict = Depends(auth.current_user)):
-    item, _ = _password_item(user, item_id)
+    item, _ = _secret_field(user, item_id, field)
     body = await request.json()
     password = body.get("password") or ""
     if not password:
         raise HTTPException(status_code=400, detail="Er is geen wachtwoord opgegeven")
-    had = database.secret_state(item_id)["has_secret"]
-    database.put_secret(item_id, vault.seal(password), by=user["email"])
+    had = database.secret_state(item_id, field)["has_secret"]
+    database.put_secret(item_id, vault.seal(password), by=user["email"], field=field)
     # The history says that it changed and when -- never what it was, and not
     # even how long it is, which is more than a bystander should learn.
     database.record(item_id, "updated",
-                    [{"key": "secret", "label": "Wachtwoord",
+                    [{"key": "secret", "label": _secret_label(item, field),
                       "from": "ingesteld" if had else "", "to": "gewijzigd" if had else "ingesteld"}],
                     by=user["email"])
     database.audit("secret.write", user_email=user["email"], org_id=item["org_id"],
-                   target=item["name"], ip=auth.client_ip(request))
-    return database.secret_state(item_id)
+                   target=item["name"], detail=_secret_label(item, field),
+                   ip=auth.client_ip(request))
+    return database.secret_state(item_id, field)
+
+
+def _secret_label(item: dict, field: str) -> str:
+    return "Wachtwoord" if field == "main" else schema.label_of(item["kind"], field)
 
 
 @app.get("/api/items/{item_id}/secret")
-def read_secret(item_id: str, request: Request,
+def read_secret(item_id: str, request: Request, field: str = "main",
                 user: dict = Depends(auth.current_user)):
     """Hand over one password, and write down that it happened.
 
@@ -854,8 +872,8 @@ def read_secret(item_id: str, request: Request,
     log worth anything: every reading of every password is one line, with who
     and from where.
     """
-    item, _ = _password_item(user, item_id)
-    record = database.get_secret(item_id)
+    item, _ = _secret_field(user, item_id, field)
+    record = database.get_secret(item_id, field)
     if not record:
         raise HTTPException(status_code=404, detail="Er staat nog geen wachtwoord in")
     try:
@@ -868,7 +886,8 @@ def read_secret(item_id: str, request: Request,
             status_code=500,
             detail="Dit wachtwoord kan niet geopend worden. Klopt DOC_SECRET_KEY nog?")
     database.audit("secret.read", user_email=user["email"], org_id=item["org_id"],
-                   target=item["name"], ip=auth.client_ip(request))
+                   target=item["name"], detail=_secret_label(item, field),
+                   ip=auth.client_ip(request))
     return JSONResponse({"password": password}, headers={"Cache-Control": "no-store"})
 
 
@@ -919,7 +938,7 @@ def search(q: str = "", user: dict = Depends(auth.current_user)):
                 spec = next((f for f in fields.values() if f.get("rmm") == key), None)
                 if spec and isinstance(value, str) and needle in value.lower():
                     hits.append({"where": spec["label"], "text": value})
-            if item["kind"] in schema.ADAPTER_KINDS:
+            if item["kind"] in schema.adapter_kinds():
                 for adapter in database.list_adapters(item["id"]):
                     for key in ("mac", "ipv4", "ipv6", "name"):
                         value = adapter.get(key) or ""
@@ -939,6 +958,169 @@ def search(q: str = "", user: dict = Depends(auth.current_user)):
     results.sort(key=lambda r: (r["hits"][0]["where"] != "Naam", r["name"].lower()))
     return {"query": q, "results": results[:SEARCH_LIMIT],
             "total": len(results), "short": False}
+
+
+# --------------------------------------------------------------------------- #
+# Types you define yourself
+#
+# The built-in kinds cover equipment and the customer's own parts. Everything
+# else an MSP writes down -- a Microsoft 365 tenant, a backup job, a certificate
+# -- differs per shop, so it is defined here rather than guessed at. A type is
+# a label and a list of fields; the things made from it live in the same table
+# as everything else, which is why they get the history, the links, the search
+# and the access rules without a line of new code.
+# --------------------------------------------------------------------------- #
+RESERVED_KEYS = {"naam", "id", "kind", "org_id", "secret", "port", "adapter"}
+
+
+def _clean_type(body: dict, existing: dict | None) -> dict:
+    label = (body.get("label") or "").strip()
+    if not label:
+        raise HTTPException(status_code=400, detail="Geef het type een naam")
+    plural = (body.get("plural") or "").strip() or f"{label}en"
+
+    fields, seen = [], set()
+    for raw in body.get("fields") or []:
+        flabel = (raw.get("label") or "").strip()
+        if not flabel:
+            continue
+        ftype = raw.get("type") or "text"
+        if ftype not in schema.CUSTOM_FIELD_TYPES:
+            raise HTTPException(status_code=400, detail=f"Onbekend soort veld: {ftype}")
+        key = (raw.get("key") or "").strip() or schema.slug(flabel).replace("-", "_")
+        if key in RESERVED_KEYS:
+            key = f"f_{key}"
+        # Two fields with one key would overwrite each other on save, silently.
+        base, n = key, 2
+        while key in seen:
+            key, n = f"{base}_{n}", n + 1
+        seen.add(key)
+        field = {"key": key, "label": flabel, "type": ftype}
+        if ftype == "select":
+            options = [o.strip() for o in (raw.get("options") or []) if str(o).strip()]
+            if not options:
+                raise HTTPException(status_code=400,
+                                    detail=f"Geef keuzes op voor het veld “{flabel}”")
+            field["options"] = options
+        if ftype == "ref":
+            target = raw.get("ref")
+            if not schema.kind(target):
+                raise HTTPException(status_code=400,
+                                    detail=f"Het veld “{flabel}” verwijst naar een "
+                                           "soort die niet bestaat")
+            field["ref"] = target
+        if ftype == "list" and raw.get("labels"):
+            field["labels"] = [str(o).strip() for o in raw["labels"] if str(o).strip()]
+        if raw.get("hint"):
+            field["hint"] = str(raw["hint"]).strip()
+        if raw.get("icon"):
+            field["icon"] = str(raw["icon"]).strip()
+        if raw.get("long"):
+            field["long"] = True
+        if raw.get("expiry") and ftype == "date":
+            field["expiry"] = True
+        fields.append(field)
+
+    if not fields:
+        raise HTTPException(status_code=400, detail="Een type zonder velden legt niets vast")
+
+    # A field that is new has no key yet, so the form names its column by
+    # label; either spelling is accepted and stored as the key.
+    # A secret has no value on the item, so as a column it would only ever be
+    # empty -- and a list is exactly where a secret must never appear.
+    keys = {f["key"] for f in fields if f["type"] != "secret"}
+    by_label = {f["label"]: f["key"] for f in fields if f["type"] != "secret"}
+    columns = []
+    for want in body.get("columns") or []:
+        key = want if want in keys else by_label.get(want)
+        if key and key not in columns:
+            columns.append(key)
+    columns = columns[:4]
+    return {"label": label, "plural": plural,
+            "icon": (body.get("icon") or "layers").strip(),
+            "sub": (body.get("sub") or "").strip(),
+            "backref": (body.get("backref") or "").strip() or "Wat hiernaar verwijst",
+            "adapters": bool(body.get("adapters")),
+            "columns": columns, "fields": fields}
+
+
+@app.get("/api/types")
+def list_types(user: dict = Depends(auth.current_user)):
+    """Everything that can be documented: the built-in kinds, marked as such,
+    and the ones defined here."""
+    return {"built_in": [{"id": name, **spec} for name, spec in schema.BUILT_IN.items()],
+            "custom": [{**database.get_item_type(t["id"]), **schema.custom()[t["id"]],
+                        "id": t["id"], "count": database.items_of_kind(t["id"])}
+                       for t in database.list_item_types()],
+            "field_types": schema.CUSTOM_FIELD_TYPES}
+
+
+@app.post("/api/types")
+async def create_type(request: Request, user: dict = Depends(auth.current_user)):
+    auth.require_admin(user)
+    body = await request.json()
+    spec = _clean_type(body, None)
+    type_id = schema.slug(body.get("id") or spec["label"])
+    if schema.kind(type_id):
+        raise HTTPException(status_code=409,
+                            detail=f"Er is al een soort met de naam “{spec['label']}”")
+    database.save_item_type(type_id, spec, by=user["email"], creating=True)
+    schema.forget_custom()
+    database.audit("type.create", user_email=user["email"], target=spec["label"],
+                   detail=f"{len(spec['fields'])} velden", ip=auth.client_ip(request))
+    return {"id": type_id, **schema.custom()[type_id]}
+
+
+@app.patch("/api/types/{type_id}")
+async def edit_type(type_id: str, request: Request,
+                    user: dict = Depends(auth.current_user)):
+    auth.require_admin(user)
+    existing = database.get_item_type(type_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Dit type bestaat niet")
+    body = await request.json()
+    spec = _clean_type(body, existing)
+    # A field that disappears takes what was filled in with it, so say which
+    # ones and how much rather than letting it be found out later.
+    gone = {f["key"] for f in existing["fields"]} - {f["key"] for f in spec["fields"]}
+    if gone and not body.get("confirm_removals"):
+        filled = {}
+        for item in database.rows("SELECT fields_json FROM items WHERE kind=?", (type_id,)):
+            stored = json.loads(item["fields_json"] or "{}")
+            for key in gone:
+                if stored.get(key):
+                    filled[key] = filled.get(key, 0) + 1
+        if filled:
+            names = ", ".join(f"“{f['label']}” ({filled[f['key']]}×)"
+                              for f in existing["fields"] if f["key"] in filled)
+            raise HTTPException(status_code=409,
+                                detail=f"Deze velden zijn ingevuld en gaan verloren: {names}")
+    database.save_item_type(type_id, spec, by=user["email"], creating=False)
+    schema.forget_custom()
+    database.audit("type.update", user_email=user["email"], target=spec["label"],
+                   ip=auth.client_ip(request))
+    return {"id": type_id, **schema.custom()[type_id]}
+
+
+@app.delete("/api/types/{type_id}")
+def remove_type(type_id: str, request: Request,
+                user: dict = Depends(auth.current_user)):
+    auth.require_admin(user)
+    existing = database.get_item_type(type_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Dit type bestaat niet")
+    count = database.items_of_kind(type_id)
+    if count:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Er {'is' if count == 1 else 'zijn'} nog {count} "
+                   f"{'item' if count == 1 else 'items'} van dit type. Voer die eerst af "
+                   "of verwijder ze.")
+    database.delete_item_type(type_id)
+    schema.forget_custom()
+    database.audit("type.delete", user_email=user["email"], target=existing["label"],
+                   ip=auth.client_ip(request))
+    return {"status": "ok"}
 
 
 # --------------------------------------------------------------------------- #

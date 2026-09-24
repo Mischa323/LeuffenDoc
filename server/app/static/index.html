@@ -206,6 +206,37 @@
     .org-head .mark .oc-rmm svg { width: 12px; height: 12px; }
     .oc-link { display: inline-flex; align-items: center; gap: 5px; }
     .oc-link svg { width: 12px; height: 12px; color: var(--accent); }
+
+    /* ---- types you define yourself ---- */
+    .type-card { display: flex; align-items: center; gap: 13px; padding: 13px 18px;
+                 border-bottom: 1px solid var(--border-soft); }
+    .type-card:last-child { border-bottom: 0; }
+    .type-card.own { cursor: pointer; }
+    .type-card.own:hover { background: var(--surface-hover); }
+    .tc-ic { width: 34px; height: 34px; border-radius: var(--r-sm); flex: none; display: grid;
+             place-items: center; background: var(--surface-3); color: var(--text-dim); }
+    .tc-ic svg { width: 17px; height: 17px; }
+    .tc-txt { flex: 1; min-width: 0; }
+    .tc-txt h3 { margin: 0; font-size: 14px; font-weight: 600; }
+    .tc-txt small { color: var(--text-faint); font-size: 12px; }
+    .tc-meta { display: flex; align-items: center; gap: 9px; font-size: 12px; flex: none; }
+
+    .tf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+               gap: 0 14px; }
+    .tf-row { border: 1px solid var(--border); border-radius: var(--r-md);
+              padding: 12px 14px 2px; margin-bottom: 12px; background: var(--surface-2); }
+    .tf-flags { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+                padding: 0 0 12px; }
+    .tf-flags .btn { margin-left: 0; }
+    .tf-flags .tf-up { margin-left: auto; }
+    .toggle-line { padding: 4px 0 14px; }
+    .icon-pick { display: flex; flex-wrap: wrap; gap: 6px; }
+    .ip { width: 34px; height: 34px; display: grid; place-items: center; cursor: pointer;
+          background: var(--surface-2); border: 1px solid var(--border);
+          border-radius: var(--r-sm); color: var(--text-dim); }
+    .ip:hover { border-color: var(--border-strong); color: var(--text); }
+    .ip.on { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+    .ip svg { width: 16px; height: 16px; }
   </style>
 </head>
 <body>
@@ -245,6 +276,7 @@
   </div>
   <script src="/icons.js"></script>
   <script src="/items.js"></script>
+  <script src="/types.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

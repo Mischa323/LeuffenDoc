@@ -22,8 +22,7 @@
     { id: "klanten", label: "Klanten", icon: "building", title: "Klanten",
       sub: "Kies een klant om zijn documentatie te openen" },
     { id: "types", label: "Documenttypes", icon: "layers", title: "Documenttypes",
-      sub: "Zelf samengestelde types, voor al je klanten", admin: true,
-      soon: "Hiermee maak je je eigen documentatiepunten: kies de velden die erin horen — tekst, keuze, datum, wachtwoord, een link naar een apparaat — en elke klant krijgt dezelfde structuur." },
+      sub: "Zelf samengestelde types, voor al je klanten", admin: true },
     { id: "logboek", label: "Logboek", icon: "history", title: "Logboek",
       sub: "Wie heeft wat bekeken en gewijzigd", admin: true },
   ];
@@ -83,6 +82,30 @@
   }
 
   const Items = window.DocItems({ api, esc, go, toast });
+
+  /* Types defined here become sections inside a customer, after the built-in
+     ones. They are rebuilt rather than reloaded, so making a type and using it
+     is one continuous thing. */
+  async function rebuildSections() {
+    const KINDS = await Items.kinds(true);
+    for (let i = ORG.length - 1; i >= 0; i--) {
+      if (ORG[i].own) ORG.splice(i, 1);
+    }
+    for (const [id, spec] of Object.entries(KINDS)) {
+      if (!spec.custom) continue;
+      ORG.push({
+        id: `t-${id}`, own: true, kinds: [id],
+        label: spec.plural, title: spec.plural, icon: spec.icon,
+        sub: spec.sub || `De ${spec.plural.toLowerCase()} van deze klant`,
+        example: spec.label,
+        empty: spec.sub || `Nog geen ${spec.plural.toLowerCase()} vastgelegd.`,
+      });
+    }
+    return KINDS;
+  }
+
+  const Types = window.DocTypes({ api, esc, toast, kinds: Items.kinds,
+                                  refresh: rebuildSections });
 
   // ---- theme (remembered per browser) ----
   // Sun and moon aren't in the shared icon set, and a theme switch that shows an
@@ -383,7 +406,13 @@
       ? `<button class="btn sm" id="add-org">${ICON.plus} Klant toevoegen</button>` : "";
 
     if (tab.id === "logboek") { $("view").innerHTML = await auditView(); return; }
-    if (tab.id === "types") { $("view").innerHTML = soonView(tab); return; }
+    if (tab.id === "types") {
+      $("page-actions").innerHTML =
+        `<button class="btn sm" id="new-type">${ICON.plus} Type toevoegen</button>`;
+      await Types.view($("view"));
+      $("new-type").onclick = () => { Types.start(); render(); };
+      return;
+    }
 
     $("view").innerHTML = orgsView();
     $("view").querySelectorAll(".orgcard[data-org]").forEach((card) => {
@@ -569,7 +598,7 @@
     initTheme();
     state.me = await api("/api/me");
     state.orgs = await api("/api/orgs");
-    KINDS = await Items.kinds();
+    KINDS = await rebuildSections();
     wireSearch();
     const name = state.me.display_name || state.me.email.split("@")[0];
     $("user-name").textContent = name;

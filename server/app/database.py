@@ -181,7 +181,8 @@ CREATE INDEX IF NOT EXISTS idx_rev_item ON revisions(item_id, at DESC);
 -- an item's fields are handed out by every list, and they land in the history
 -- as "from this to that". A secret must never travel that way.
 CREATE TABLE IF NOT EXISTS secrets (
-    item_id     TEXT PRIMARY KEY,
+    item_id     TEXT NOT NULL,
+    field_key   TEXT NOT NULL DEFAULT 'main',
     wrapped_key BLOB NOT NULL,
     wrap_nonce  BLOB NOT NULL,
     nonce       BLOB NOT NULL,
@@ -189,7 +190,27 @@ CREATE TABLE IF NOT EXISTS secrets (
     key_version INTEGER NOT NULL DEFAULT 1,
     updated_at  REAL NOT NULL,
     updated_by  TEXT,
+    PRIMARY KEY (item_id, field_key),
     FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+);
+
+-- Types people define themselves. The built-in ones live in schema.py; these
+-- join them at run time and are rendered by exactly the same code, which is
+-- why the interface needs nothing new to show one.
+CREATE TABLE IF NOT EXISTS item_types (
+    id           TEXT PRIMARY KEY,      -- what items.kind holds
+    label        TEXT NOT NULL,
+    plural       TEXT NOT NULL,
+    icon         TEXT,
+    sub          TEXT,
+    backref      TEXT,
+    adapters     INTEGER NOT NULL DEFAULT 0,
+    columns_json TEXT NOT NULL DEFAULT '[]',
+    fields_json  TEXT NOT NULL DEFAULT '[]',
+    created_at   REAL NOT NULL,
+    created_by   TEXT,
+    updated_at   REAL NOT NULL,
+    updated_by   TEXT
 );
 """
 
@@ -217,7 +238,32 @@ def init_db() -> None:
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Additive migrations for databases created by an earlier version."""
-    return
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(secrets)")}
+    if cols and "field_key" not in cols:
+        # A vault entry used to hold one password. A type you define yourself
+        # can have several, so the key is now the item *and* the field; what is
+        # already stored becomes the item's main one.
+        conn.executescript("""
+            ALTER TABLE secrets RENAME TO secrets_old;
+            CREATE TABLE secrets (
+                item_id     TEXT NOT NULL,
+                field_key   TEXT NOT NULL DEFAULT 'main',
+                wrapped_key BLOB NOT NULL,
+                wrap_nonce  BLOB NOT NULL,
+                nonce       BLOB NOT NULL,
+                ciphertext  BLOB NOT NULL,
+                key_version INTEGER NOT NULL DEFAULT 1,
+                updated_at  REAL NOT NULL,
+                updated_by  TEXT,
+                PRIMARY KEY (item_id, field_key),
+                FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+            );
+            INSERT INTO secrets (item_id, field_key, wrapped_key, wrap_nonce, nonce,
+                                 ciphertext, key_version, updated_at, updated_by)
+                SELECT item_id, 'main', wrapped_key, wrap_nonce, nonce, ciphertext,
+                       key_version, updated_at, updated_by FROM secrets_old;
+            DROP TABLE secrets_old;
+        """)
 
 
 def get_conn() -> sqlite3.Connection:
@@ -620,32 +666,41 @@ def relations_of(item_id: str) -> list:
 # because nothing in the interface needs one and its existence would be the
 # most useful call in the place for anyone who should not have it.
 # --------------------------------------------------------------------------- #
-def put_secret(item_id: str, record: dict, by: str | None) -> None:
+def put_secret(item_id: str, record: dict, by: str | None, field: str = "main") -> None:
     with write() as conn:
         conn.execute(
-            "INSERT INTO secrets (item_id, wrapped_key, wrap_nonce, nonce, ciphertext, "
-            "key_version, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(item_id) DO UPDATE SET wrapped_key=excluded.wrapped_key, "
+            "INSERT INTO secrets (item_id, field_key, wrapped_key, wrap_nonce, nonce, ciphertext, "
+            "key_version, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(item_id, field_key) DO UPDATE SET wrapped_key=excluded.wrapped_key, "
             "wrap_nonce=excluded.wrap_nonce, nonce=excluded.nonce, "
             "ciphertext=excluded.ciphertext, key_version=excluded.key_version, "
             "updated_at=excluded.updated_at, updated_by=excluded.updated_by",
-            (item_id, record["wrapped_key"], record["wrap_nonce"], record["nonce"],
+            (item_id, field, record["wrapped_key"], record["wrap_nonce"], record["nonce"],
              record["ciphertext"], record["key_version"], record["updated_at"], by))
 
 
-def get_secret(item_id: str) -> dict | None:
-    return row("SELECT * FROM secrets WHERE item_id=?", (item_id,))
+def get_secret(item_id: str, field: str = "main") -> dict | None:
+    return row("SELECT * FROM secrets WHERE item_id=? AND field_key=?", (item_id, field))
 
 
-def secret_state(item_id: str) -> dict:
-    r = row("SELECT updated_at, updated_by FROM secrets WHERE item_id=?", (item_id,))
+def secret_state(item_id: str, field: str = "main") -> dict:
+    r = row("SELECT updated_at, updated_by FROM secrets WHERE item_id=? AND field_key=?",
+            (item_id, field))
     return {"has_secret": bool(r), "secret_updated_at": r["updated_at"] if r else None,
             "secret_updated_by": r["updated_by"] if r else None}
 
 
-def drop_secret(item_id: str) -> None:
+def secret_fields(item_id: str) -> dict:
+    """Which fields of one item hold a secret, and when each last changed."""
+    return {r["field_key"]: {"has_secret": True, "secret_updated_at": r["updated_at"],
+                             "secret_updated_by": r["updated_by"]}
+            for r in rows("SELECT field_key, updated_at, updated_by FROM secrets "
+                          "WHERE item_id=?", (item_id,))}
+
+
+def drop_secret(item_id: str, field: str = "main") -> None:
     with write() as conn:
-        conn.execute("DELETE FROM secrets WHERE item_id=?", (item_id,))
+        conn.execute("DELETE FROM secrets WHERE item_id=? AND field_key=?", (item_id, field))
 
 
 # --------------------------------------------------------------------------- #
@@ -835,3 +890,62 @@ def port_holder(switch_id: str, number: int) -> dict | None:
     return row("SELECT a.id, a.name, i.name AS item_name FROM switch_ports p "
                "JOIN adapters a ON a.id = p.adapter_id JOIN items i ON i.id = a.item_id "
                "WHERE p.switch_id=? AND p.number=?", (switch_id, number))
+
+
+# --------------------------------------------------------------------------- #
+# Types people define themselves
+#
+# Stored as a definition, not as a table per type: a type is a label and a list
+# of fields, and the items made from it live in the same `items` table as
+# everything else. That is what makes history, links, search and access work
+# for a type nobody had thought of when this was written.
+# --------------------------------------------------------------------------- #
+def _type_out(r: dict) -> dict:
+    r = dict(r)
+    r["fields"] = json.loads(r.pop("fields_json", None) or "[]")
+    r["columns"] = json.loads(r.pop("columns_json", None) or "[]")
+    r["adapters"] = bool(r.get("adapters"))
+    return r
+
+
+def list_item_types() -> list:
+    return [_type_out(r) for r in
+            rows("SELECT * FROM item_types ORDER BY label COLLATE NOCASE")]
+
+
+def get_item_type(type_id: str) -> dict | None:
+    r = row("SELECT * FROM item_types WHERE id=?", (type_id,))
+    return _type_out(r) if r else None
+
+
+def save_item_type(type_id: str, spec: dict, by: str | None, creating: bool) -> dict:
+    now = time.time()
+    with write() as conn:
+        if creating:
+            conn.execute(
+                "INSERT INTO item_types (id, label, plural, icon, sub, backref, adapters, "
+                "columns_json, fields_json, created_at, created_by, updated_at, updated_by) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (type_id, spec["label"], spec["plural"], spec.get("icon"), spec.get("sub"),
+                 spec.get("backref"), int(bool(spec.get("adapters"))),
+                 json.dumps(spec.get("columns") or []), json.dumps(spec.get("fields") or []),
+                 now, by, now, by))
+        else:
+            conn.execute(
+                "UPDATE item_types SET label=?, plural=?, icon=?, sub=?, backref=?, adapters=?, "
+                "columns_json=?, fields_json=?, updated_at=?, updated_by=? WHERE id=?",
+                (spec["label"], spec["plural"], spec.get("icon"), spec.get("sub"),
+                 spec.get("backref"), int(bool(spec.get("adapters"))),
+                 json.dumps(spec.get("columns") or []), json.dumps(spec.get("fields") or []),
+                 now, by, type_id))
+    return get_item_type(type_id)
+
+
+def delete_item_type(type_id: str) -> None:
+    with write() as conn:
+        conn.execute("DELETE FROM item_types WHERE id=?", (type_id,))
+
+
+def items_of_kind(kind: str) -> int:
+    """How many things exist of a type -- what a delete has to answer to."""
+    return get_conn().execute("SELECT COUNT(*) FROM items WHERE kind=?", (kind,)).fetchone()[0]
