@@ -311,6 +311,8 @@ def _launch_helper(image: str, plan: dict) -> str:
         "HostConfig": {"Binds": [f"{SOCK}:{SOCK}"], "AutoRemove": True,
                        "RestartPolicy": {"Name": "no"}},
         "Labels": {"com.leuffen.doc.role": "updater"},
+        # The new image's health check is about the server, not this helper.
+        "Healthcheck": {"Test": ["NONE"]},
     }
     code, data = _json("POST", "/containers/create", body)
     if code not in (200, 201) or not isinstance(data, dict):
