@@ -389,9 +389,16 @@ def _may_see(user: dict, org_id: str, need: str = "read") -> dict:
     return org
 
 
+def _hidden(user: dict) -> set:
+    """Items shut off to other people, which this person must not see anywhere
+    -- not on their page, in a list, in search or at the end of a link. For
+    them such an item does not exist."""
+    return set() if user.get("is_admin") else database.hidden_items(user["email"])
+
+
 def _item_for(user: dict, item_id: str, need: str = "read") -> tuple[dict, dict]:
     item = database.get_item(item_id)
-    if not item:
+    if not item or item_id in _hidden(user):
         raise HTTPException(status_code=404, detail="Dit item bestaat niet")
     return item, _may_see(user, item["org_id"], need)
 
@@ -400,7 +407,7 @@ def _labeller(kind: str):
     return lambda key: schema.label_of(kind, key)
 
 
-def _referred_by(item: dict) -> list:
+def _referred_by(item: dict, hidden: set | None = None) -> list:
     """Everything in this customer that points at this item.
 
     A reference is written on one side -- a computer names its location -- but
@@ -410,7 +417,7 @@ def _referred_by(item: dict) -> list:
     refs = schema.ref_fields()
     out = []
     for other in database.list_items(item["org_id"], include_archived=True):
-        if other["id"] == item["id"]:
+        if other["id"] == item["id"] or other["id"] in (hidden or ()):
             continue
         for field in refs.get(other["kind"], []):
             if other["fields"].get(field["key"]) == item["id"]:
@@ -420,13 +427,18 @@ def _referred_by(item: dict) -> list:
     return out
 
 
-def _decorate(item: dict) -> dict:
+def _decorate(item: dict, user: dict) -> dict:
     """An item as the interface wants it: its own fields, what the RMM knows,
     what it is related to, its network adapters, and -- for a switch -- the
-    patch list of its ports."""
+    patch list of its ports. What this person may not see is left out of the
+    links, so a restricted item does not show up at the end of one."""
+    hidden = _hidden(user)
     item = dict(item)
-    item["relations"] = database.relations_of(item["id"])
-    item["referred_by"] = _referred_by(item)
+    item["relations"] = [r for r in database.relations_of(item["id"]) if r["id"] not in hidden]
+    item["referred_by"] = _referred_by(item, hidden)
+    people = database.item_people(item["id"])
+    item["restricted"] = bool(people)
+    item["people"] = people
     if item["kind"] == "password":
         item.update(database.secret_state(item["id"]))
     if schema.secret_fields_of(item["kind"]):
@@ -450,14 +462,25 @@ def org_items(org_id: str, kind: str | None = None, archived: bool = False,
     _may_see(user, org_id)
     if kind and not schema.kind(kind):
         raise HTTPException(status_code=400, detail=f"Onbekend soort: {kind}")
-    return database.list_items(org_id, kind, include_archived=archived)
+    hidden = _hidden(user)
+    restricted = database.restricted_items()
+    return [{**i, "restricted": i["id"] in restricted}
+            for i in database.list_items(org_id, kind, include_archived=archived)
+            if i["id"] not in hidden]
 
 
 @app.get("/api/orgs/{org_id}/summary")
 def org_summary(org_id: str, user: dict = Depends(auth.current_user)):
     """How much of each kind this customer has -- what the overview shows."""
     org = _may_see(user, org_id)
-    return {"org": org, "counts": database.count_items(org_id)}
+    # Counted from what this person can see: a total that includes what is
+    # shut off to them would still say it is there.
+    hidden = _hidden(user)
+    counts: dict = {}
+    for item in database.list_items(org_id):
+        if item["id"] not in hidden:
+            counts[item["kind"]] = counts.get(item["kind"], 0) + 1
+    return {"org": org, "counts": counts}
 
 
 @app.post("/api/orgs/{org_id}/items")
@@ -488,13 +511,13 @@ async def create_org_item(org_id: str, request: Request,
     database.audit("item.create", user_email=user["email"], org_id=org_id,
                    target=name, detail=schema.kind(kind)["label"],
                    ip=auth.client_ip(request))
-    return _decorate(item)
+    return _decorate(item, user)
 
 
 @app.get("/api/items/{item_id}")
 def read_item(item_id: str, user: dict = Depends(auth.current_user)):
     item, _ = _item_for(user, item_id)
-    return _decorate(item)
+    return _decorate(item, user)
 
 
 @app.patch("/api/items/{item_id}")
@@ -512,7 +535,7 @@ async def edit_item(item_id: str, request: Request,
         by=user["email"], label=_labeller(item["kind"]))
     database.audit("item.update", user_email=user["email"], org_id=item["org_id"],
                    target=updated["name"], ip=auth.client_ip(request))
-    return _decorate(updated)
+    return _decorate(updated, user)
 
 
 @app.post("/api/items/{item_id}/archive")
@@ -528,7 +551,7 @@ async def archive_item(item_id: str, request: Request,
     database.audit("item.archive" if archived else "item.restore",
                    user_email=user["email"], org_id=item["org_id"],
                    target=item["name"], ip=auth.client_ip(request))
-    return _decorate(updated)
+    return _decorate(updated, user)
 
 
 @app.delete("/api/items/{item_id}")
@@ -598,7 +621,7 @@ def revert_revision(revision_id: int, request: Request,
     database.audit("item.revert", user_email=user["email"], org_id=item["org_id"],
                    target=item["name"], detail=f"wijziging {revision_id}",
                    ip=auth.client_ip(request))
-    return _decorate(updated)
+    return _decorate(updated, user)
 
 
 # --------------------------------------------------------------------------- #
@@ -950,9 +973,12 @@ def search(q: str = "", user: dict = Depends(auth.current_user)):
         return {"query": q, "results": [], "short": True}
 
     orgs = database.list_orgs() if user.get("is_admin") else database.user_orgs(user["email"])
+    hidden = _hidden(user)
     results = []
     for org in orgs:
         for item in database.list_items(org["id"], include_archived=True):
+            if item["id"] in hidden:
+                continue
             fields = schema.fields_of(item["kind"])
             hits = []
             if needle in item["name"].lower():
@@ -1303,6 +1329,58 @@ def update_apply(request: Request, user: dict = Depends(auth.current_user)):
     database.audit("server.update", user_email=user["email"],
                    detail=f"van {VERSION}", ip=auth.client_ip(request))
     return {"version": VERSION, **result}
+
+
+# --------------------------------------------------------------------------- #
+# Shutting an item off to named people
+#
+# Everyone with access to a customer sees its items. A password -- or anything
+# else -- can be shut off so only named colleagues (and administrators) see it.
+# For anyone else it does not exist: not on its page, in a list, in search, at
+# the end of a link, or in a count.
+# --------------------------------------------------------------------------- #
+EVERYONE = "iedereen met toegang tot de klant"
+
+
+@app.get("/api/items/{item_id}/access")
+def item_access(item_id: str, user: dict = Depends(auth.current_user)):
+    item, _ = _item_for(user, item_id)
+    people = database.item_people(item_id)
+    candidates = [{"email": p["email"], "name": p.get("display_name") or p["email"],
+                   "is_admin": bool(p.get("is_admin")),
+                   "role": "admin" if p.get("is_admin")
+                   else database.user_role(p["email"], item["org_id"])}
+                  for p in database.people_at(item["org_id"])]
+    return {"restricted": bool(people), "people": people, "candidates": candidates}
+
+
+@app.put("/api/items/{item_id}/access")
+async def set_item_access(item_id: str, request: Request,
+                          user: dict = Depends(auth.current_user)):
+    item, org = _item_for(user, item_id, "edit")
+    body = await request.json()
+    wanted = sorted({str(e).strip().lower() for e in (body.get("people") or []) if str(e).strip()})
+    allowed = {p["email"] for p in database.people_at(item["org_id"])}
+    strangers = [e for e in wanted if e not in allowed]
+    if strangers:
+        raise HTTPException(status_code=400,
+                            detail=f"{strangers[0]} heeft geen toegang tot {org['name']}")
+    # Whoever shuts something off keeps it: locking yourself out of what you
+    # are standing on is never what was meant. Administrators see it anyway.
+    if wanted and not user.get("is_admin") and user["email"] not in wanted:
+        wanted.append(user["email"])
+        wanted.sort()
+    before = database.item_people(item_id)
+    database.set_item_people(item_id, wanted)
+    if before != wanted:
+        database.record(item_id, "updated",
+                        [{"key": "access", "label": "Wie dit mag zien",
+                          "from": ", ".join(before) or EVERYONE,
+                          "to": ", ".join(wanted) or EVERYONE}], by=user["email"])
+        database.audit("item.access", user_email=user["email"], org_id=item["org_id"],
+                       target=item["name"], detail=", ".join(wanted) or EVERYONE,
+                       ip=auth.client_ip(request))
+    return {"restricted": bool(wanted), "people": wanted}
 
 
 # --------------------------------------------------------------------------- #

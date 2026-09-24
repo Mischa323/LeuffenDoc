@@ -194,6 +194,17 @@ CREATE TABLE IF NOT EXISTS secrets (
     FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
 );
 
+-- Who may see an item that has been shut off from the rest of the customer.
+-- No rows means it is not restricted: everyone with access to the customer
+-- sees it. Any rows, and only those people (and administrators) do.
+CREATE TABLE IF NOT EXISTS item_access (
+    item_id     TEXT NOT NULL,
+    user_email  TEXT NOT NULL,
+    PRIMARY KEY (item_id, user_email),
+    FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_item_access_user ON item_access(user_email);
+
 -- Types people define themselves. The built-in ones live in schema.py; these
 -- join them at run time and are rendered by exactly the same code, which is
 -- why the interface needs nothing new to show one.
@@ -960,3 +971,38 @@ def delete_item_type(type_id: str) -> None:
 def items_of_kind(kind: str) -> int:
     """How many things exist of a type -- what a delete has to answer to."""
     return get_conn().execute("SELECT COUNT(*) FROM items WHERE kind=?", (kind,)).fetchone()[0]
+
+
+# --------------------------------------------------------------------------- #
+# Items shut off to named people
+# --------------------------------------------------------------------------- #
+def hidden_items(email: str) -> set:
+    """Items that are restricted to other people -- the ones this person must
+    not see at all, anywhere."""
+    return {r["item_id"] for r in rows(
+        "SELECT DISTINCT item_id FROM item_access WHERE item_id NOT IN "
+        "(SELECT item_id FROM item_access WHERE user_email=?)", (email.lower(),))}
+
+
+def restricted_items() -> set:
+    return {r["item_id"] for r in rows("SELECT DISTINCT item_id FROM item_access")}
+
+
+def item_people(item_id: str) -> list:
+    return [r["user_email"] for r in
+            rows("SELECT user_email FROM item_access WHERE item_id=? ORDER BY user_email",
+                 (item_id,))]
+
+
+def set_item_people(item_id: str, emails: list) -> None:
+    with write() as conn:
+        conn.execute("DELETE FROM item_access WHERE item_id=?", (item_id,))
+        conn.executemany("INSERT OR IGNORE INTO item_access (item_id, user_email) VALUES (?, ?)",
+                         [(item_id, e.lower()) for e in emails])
+
+
+def people_at(org_id: str) -> list:
+    """Everyone who can see a customer: those given it, and administrators."""
+    return rows(
+        "SELECT email, display_name, is_admin FROM users WHERE is_admin=1 OR email IN "
+        "(SELECT user_email FROM org_users WHERE org_id=?) ORDER BY email", (org_id,))

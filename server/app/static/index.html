@@ -261,6 +261,18 @@
     .test-out.good { color: var(--good); }
     .test-out.bad { color: var(--bad); }
     input.inp:disabled { opacity: .55; cursor: not-allowed; }
+
+    /* ---- who may see an item ---- */
+    .acc-summary { padding: 13px 18px; font-size: 13px; color: var(--text-dim); line-height: 1.6; }
+    .acc-summary b { color: var(--text); font-weight: 600; }
+    .acc-list { border-top: 1px solid var(--border-soft); }
+    .acc-row { display: flex; align-items: center; gap: 10px; padding: 9px 18px; font-size: 13px;
+               border-bottom: 1px solid var(--border-soft); cursor: pointer; }
+    .acc-row.fixed { cursor: default; opacity: .75; }
+    .acc-row input { width: 16px; height: 16px; accent-color: var(--accent); }
+    .acc-name { font-weight: 600; }
+    .acc-foot { display: flex; align-items: center; gap: 8px; padding: 12px 18px; }
+    .tag svg { width: 10px; height: 10px; margin-right: 3px; }
   </style>
 </head>
 <body>

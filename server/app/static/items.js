@@ -25,6 +25,10 @@ window.DocItems = function (ctx) {
     return KINDS;
   }
 
+  /* Everything of one customer. Fetched fresh whenever a list, a page or the
+     overview is opened -- other people change things too, and a long-open tab
+     must not keep showing what was true this morning -- and reused only while
+     one view redraws itself. */
   async function index(orgId, fresh) {
     if (fresh) indexes.delete(orgId);
     if (!indexes.has(orgId)) {
@@ -62,7 +66,7 @@ window.DocItems = function (ctx) {
     }
     if (field.type === "ref") {
       const other = (all || []).find((i) => i.id === raw);
-      return other ? other.name : "(verwijderd)";
+      return other ? other.name : "(niet beschikbaar)";
     }
     if (field.type === "list") {
       return (Array.isArray(raw) ? raw : [])
@@ -236,7 +240,7 @@ window.DocItems = function (ctx) {
 
   async function listView(host, org, section) {
     await kinds();
-    const all = await index(org.id);
+    const all = await index(org.id, true);
     const allowed = section.kinds;
     const params = new URLSearchParams(location.hash.split("?")[1] || "");
     let kind = allowed.includes(params.get("soort")) ? params.get("soort") : null;
@@ -276,6 +280,7 @@ window.DocItems = function (ctx) {
         <th></th></tr></thead><tbody>
         ${items.map((i) => `<tr data-item="${esc(i.id)}">
           <td><b>${esc(i.name)}</b>${i.archived ? ' <span class="tag">afgevoerd</span>' : ""}
+            ${i.restricted ? ` <span class="tag warn" title="Alleen voor genoemde collega's">${ICON.lock}</span>` : ""}
             ${i.rmm_gone ? ' <span class="tag warn">niet meer in de RMM</span>' : ""}</td>
           ${kind ? "" : `<td><span class="kind-cell">${ICON[KINDS[i.kind].icon]} ${esc(KINDS[i.kind].label)}</span></td>`}
           ${cols.map((c) => `<td>${cell(i, c, all) || "—"}</td>`).join("")}
@@ -388,7 +393,7 @@ window.DocItems = function (ctx) {
   async function detailView(host, org, itemId) {
     await kinds();
     let item = await api(`/api/items/${itemId}`);
-    let all = await index(org.id);      // refreshed after a change, for the ref fields
+    let all = await index(org.id, true);  // refreshed after a change, for the ref fields
     const spec = KINDS[item.kind];
     // Decided by the server per customer (the role comes from the RMM); the
     // page only leaves out what would be refused anyway.
@@ -405,7 +410,8 @@ window.DocItems = function (ctx) {
     const head = () => `<div class="panel item-head">
         <div class="ih-mark">${ICON[spec.icon]}</div>
         <div class="ih-txt">
-          <h3>${esc(item.name)}${item.archived ? ' <span class="tag">afgevoerd</span>' : ""}</h3>
+          <h3>${esc(item.name)}${item.archived ? ' <span class="tag">afgevoerd</span>' : ""}
+            ${item.restricted ? ` <span class="tag warn">${ICON.lock} afgeschermd</span>` : ""}</h3>
           <small>${esc(spec.label)} · ${source}</small>
         </div>
         <div class="ih-act" id="item-actions"></div>
@@ -455,7 +461,7 @@ window.DocItems = function (ctx) {
              <div class="form-foot"><button class="btn ghost" id="edit-cancel">Annuleren</button>
                <button class="btn" id="edit-save">${ICON.save} Opslaan</button></div>`
                    : readBlocks()
-                     + `<div id="secret"></div>`
+                     + `<div id="secret"></div><div id="access"></div>`
                      + `<div id="adapters"></div><div id="ports"></div>`
                      + `<div id="referred"></div>`
                      + `<div id="related"></div><div id="history"></div>`);
@@ -474,6 +480,7 @@ window.DocItems = function (ctx) {
           a.onclick = () => go(`#/klant/${org.id}/item/${a.dataset.goto}`);
         });
         drawSecret();
+        drawAccess();
         drawAdapters();
         drawPorts();
         drawReferredBy();
@@ -556,6 +563,74 @@ window.DocItems = function (ctx) {
       slot.innerHTML = slots.map((s) => `<div data-secret="${esc(s.field)}"></div>`).join("");
       slots.forEach((s) =>
         drawOneSecret(slot.querySelector(`[data-secret="${CSS.escape(s.field)}"]`), s));
+    }
+
+    /* Who may see this. Everyone with access to the customer, unless it is
+       shut off to named colleagues -- for anyone else it then does not exist,
+       anywhere. Offered where a password lives, which is what needs it. */
+    function drawAccess() {
+      const slot = host.querySelector("#access");
+      if (!slot) return;
+      if (!secretSlots().length) { slot.innerHTML = ""; return; }
+      const people = item.people || [];
+      slot.innerHTML = `<div class="panel">
+          <div class="panel-head"><h2>Wie mag dit zien</h2>
+            ${people.length ? `<span class="tag warn">${ICON.lock} afgeschermd</span>` : ""}
+            <div class="spacer"></div>
+            ${mayEdit ? `<button class="btn ghost sm" id="acc-edit">${people.length
+              ? `${ICON.pencil} Wijzigen` : `${ICON.lock} Afschermen`}</button>` : ""}</div>
+          <div class="acc-summary">${people.length
+            ? `Alleen <b>${people.map(esc).join("</b>, <b>")}</b> — en beheerders, die alles zien.
+               Voor ieder ander bestaat dit niet: niet in de lijst, niet in zoeken, niet bij een koppeling.`
+            : "Iedereen met toegang tot deze klant."}</div>
+          <div id="acc-form"></div>
+        </div>`;
+      const edit = slot.querySelector("#acc-edit");
+      if (!edit) return;
+      edit.onclick = async () => {
+        const box = slot.querySelector("#acc-form");
+        if (box.dataset.open === "1") { box.dataset.open = "0"; box.innerHTML = ""; return; }
+        box.dataset.open = "1";
+        let access;
+        try { access = await api(`/api/items/${item.id}/access`); }
+        catch (e) { toast(e.message); return; }
+        const chosen = new Set(access.people);
+        box.innerHTML = `<div class="acc-list">${access.candidates.map((c) => `
+            <label class="acc-row${c.is_admin ? " fixed" : ""}">
+              <input type="checkbox" value="${esc(c.email)}"${c.is_admin ? " checked disabled"
+                : chosen.has(c.email) ? " checked" : ""} />
+              <span class="acc-name">${esc(c.name)}</span>
+              <span class="muted">${esc(c.email)}</span>
+              ${c.is_admin ? '<span class="tag">beheerder — ziet het altijd</span>'
+                : c.role === "viewer" ? '<span class="tag">alleen lezen</span>' : ""}
+            </label>`).join("")}</div>
+          <div class="acc-foot">
+            ${access.restricted ? `<button class="btn ghost sm" id="acc-open">Iedereen weer toegang geven</button>` : ""}
+            <div style="flex:1"></div>
+            <button class="btn sm" id="acc-save">${ICON.lock} Alleen voor wie aangevinkt is</button>
+          </div>
+          <div class="hint" style="padding:0 18px 14px">Jij blijft er altijd bij: afschermen voor jezelf
+            kan niet.</div>`;
+        const save = async (people) => {
+          try {
+            await api(`/api/items/${item.id}/access`, {
+              method: "PUT", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ people }),
+            });
+            item = await api(`/api/items/${item.id}`);
+            forget(org.id);
+            toast(people.length ? "Afgeschermd" : "Weer zichtbaar voor iedereen bij deze klant");
+            draw();
+          } catch (e) { toast(e.message); }
+        };
+        box.querySelector("#acc-save").onclick = () => {
+          const people = [...box.querySelectorAll("input:checked:not(:disabled)")].map((i) => i.value);
+          if (!people.length) { toast("Vink minstens één collega aan, of kies Iedereen"); return; }
+          save(people);
+        };
+        const open = box.querySelector("#acc-open");
+        if (open) open.onclick = () => save([]);
+      };
     }
 
     /* One panel per secret. A page can carry several -- a tenant with an
@@ -1100,7 +1175,7 @@ window.DocItems = function (ctx) {
      of a date is being told about it, not being able to look it up. */
   async function expiring(orgId) {
     await kinds();
-    const all = await index(orgId);
+    const all = await index(orgId, true);
     const out = [];
     for (const item of all) {
       if (item.archived) continue;
