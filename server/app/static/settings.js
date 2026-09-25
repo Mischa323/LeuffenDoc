@@ -162,6 +162,196 @@ window.DocSettings = function (ctx) {
         <div class="form-body" style="padding-bottom:16px">${where}</div></div>`;
   }
 
+  /* Back-ups: snapshots in the data volume, one to take away (always
+     encrypted), and putting one back. Putting back is two steps on purpose --
+     choosing it, then saying yes to what it will replace. */
+  function backupBlock() {
+    return block("backup", "Back-ups", "Momentopnamen in het datavolume, en een versleutelde kopie om mee te nemen",
+      `<div class="tf-grid">
+         ${field("DOC_BACKUP_HOURS", "Automatisch, elke (uur)", {
+           hint: "0 is uit. Ook na een herstart loopt dit gewoon door.",
+         })}
+         ${field("DOC_BACKUP_KEEP", "Automatische bewaren", {
+           hint: "De oudste gaan weg. Handmatige en geüploade blijven tot je ze verwijdert.",
+         })}
+       </div>
+       <div id="bk-list" class="bk-list"><span class="muted">Laden…</span></div>`,
+      `<button class="btn ghost sm" id="bk-make">${ICON.plus} Nu een back-up maken</button>
+       <button class="btn ghost sm" id="bk-upload">${ICON.upload} Back-up uploaden…</button>`);
+  }
+
+  const size = (n) => n >= 1048576 ? `${(n / 1048576).toFixed(1).replace(".", ",")} MB`
+    : `${Math.max(1, Math.round(n / 1024))} kB`;
+  const when = (t) => new Date(t * 1000).toLocaleString("nl-NL", { dateStyle: "medium", timeStyle: "short" });
+
+  async function drawBackups(host) {
+    const slot = host.querySelector("#bk-list");
+    if (!slot) return;
+    let d;
+    try { d = await api("/api/admin/backups"); }
+    catch (e) { slot.innerHTML = `<span class="muted">${esc(e.message)}</span>`; return; }
+    const keyNote = d.key && d.key.in_database
+      ? `<div class="callout warn" style="margin:4px 0 12px"><div class="ic">${ICON.alert}</div><div>
+           <div class="cd">De sleutel van de kluis staat in de database, dus elke back-up bevat hem ook.
+             Een gedownloade back-up is daarom altijd versleuteld met een wachtwoordzin — bewaar die
+             ergens anders dan het bestand.</div></div></div>` : "";
+    const failed = d.last_auto && d.last_auto.ok === false
+      ? `<div class="callout warn" style="margin:4px 0 12px"><div class="ic">${ICON.alert}</div><div>
+           <div class="ct">De laatste automatische back-up is mislukt</div>
+           <div class="cd">${esc(d.last_auto.detail)}</div></div></div>` : "";
+    const rows = d.backups.map((b) => `
+        <tr data-name="${esc(b.name)}">
+          <td>${esc(when(b.made_at))}</td>
+          <td><span class="tag${b.kind === "voor-terugzetten" ? " warn" : ""}">${esc(b.label)}</span></td>
+          <td class="muted">${b.customers ?? "?"} klanten · ${b.items ?? "?"} items · ${b.passwords ?? "?"} wachtwoorden</td>
+          <td class="muted">${size(b.size)}</td>
+          <td class="bk-actions">
+            <button class="btn ghost sm" data-bk="download">${ICON.download} Downloaden</button>
+            <button class="btn ghost sm" data-bk="restore">${ICON.history} Terugzetten</button>
+            <button class="btn ghost sm" data-bk="delete" title="Verwijderen">${ICON.trash}</button>
+          </td></tr>
+        <tr class="bk-form hidden" data-form="${esc(b.name)}"><td colspan="5"></td></tr>`).join("");
+    const upload = `<div class="bk-inline bk-up hidden" id="bk-up">
+        <input type="file" id="bk-file" accept=".ldbak,.db" class="inp" />
+        <input class="inp" type="password" id="bk-up-pass" placeholder="Wachtwoordzin van het bestand" autocomplete="off" />
+        <button class="btn sm" id="bk-up-go">${ICON.upload} Uploaden en controleren</button>
+        <div class="hint" style="flex-basis:100%;margin:0">Het bestand wordt gecontroleerd en klaargezet.
+          Terugzetten is daarna een aparte stap.</div></div>`;
+    slot.innerHTML = keyNote + failed + upload + (d.backups.length
+      ? `<table class="grid bk-table"><thead><tr><th>Gemaakt</th><th>Soort</th><th>Inhoud</th>
+          <th>Grootte</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+      : `<div class="muted" style="padding:6px 0">Nog geen back-ups.</div>`)
+      + `<div class="hint" style="margin-top:8px">Ze staan in <code>${esc(d.folder)}</code>, dus een back-up
+          van het datavolume neemt ze mee — als bestanden die heel zijn, ook als de server draaide.</div>`;
+    wireBackups(host, d);
+    wireUpload(host);
+  }
+
+  function formOf(host, name) {
+    host.querySelectorAll(".bk-form").forEach((tr) => {
+      if (tr.dataset.form !== name) { tr.classList.add("hidden"); tr.firstElementChild.innerHTML = ""; }
+    });
+    const tr = host.querySelector(`.bk-form[data-form="${CSS.escape(name)}"]`);
+    tr.classList.remove("hidden");
+    return tr.firstElementChild;
+  }
+
+  function wireBackups(host, d) {
+    host.querySelectorAll("[data-bk]").forEach((btn) => {
+      const name = btn.closest("tr").dataset.name;
+      const b = d.backups.find((x) => x.name === name);
+      btn.onclick = async () => {
+        const what = btn.dataset.bk;
+        if (what === "delete") {
+          try {
+            await api(`/api/admin/backups/${encodeURIComponent(name)}`, { method: "DELETE" });
+            toast("Back-up verwijderd");
+            drawBackups(host);
+          } catch (e) { toast(e.message); }
+          return;
+        }
+        const cell = formOf(host, name);
+        if (what === "download") {
+          cell.innerHTML = `<div class="bk-inline">
+              <input class="inp" type="password" id="bk-pass" placeholder="Wachtwoordzin, 12+ tekens" autocomplete="new-password" />
+              <input class="inp" type="password" id="bk-pass2" placeholder="Nog een keer" autocomplete="new-password" />
+              <button class="btn sm" id="bk-go">${ICON.download} Versleuteld downloaden</button>
+              <div class="hint" style="flex-basis:100%;margin:0">Zonder deze wachtwoordzin gaat de back-up niet
+                meer open, ook niet door ons. Bewaar hem ergens anders dan het bestand.</div></div>`;
+          cell.querySelector("#bk-pass").focus();
+          cell.querySelector("#bk-go").onclick = async (ev) => {
+            const go = ev.currentTarget;
+            const pass = cell.querySelector("#bk-pass").value;
+            if (pass !== cell.querySelector("#bk-pass2").value) { toast("De twee wachtwoordzinnen verschillen"); return; }
+            go.disabled = true;
+            try {
+              const res = await fetch(`/api/admin/backups/${encodeURIComponent(name)}/download`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ passphrase: pass }),
+              });
+              if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `${res.status}`);
+              const file = (res.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/);
+              const url = URL.createObjectURL(await res.blob());
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = file ? file[1] : "leuffendoc.ldbak";
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              setTimeout(() => URL.revokeObjectURL(url), 5000);
+              cell.closest("tr").classList.add("hidden");
+              toast("Gedownload — versleuteld");
+            } catch (e) { toast(e.message); go.disabled = false; }
+          };
+        }
+        if (what === "restore") {
+          cell.innerHTML = `<div class="callout warn" style="margin:0"><div class="ic">${ICON.alert}</div><div style="flex:1">
+              <div class="ct">Alles terugzetten naar ${esc(when(b.made_at))}?</div>
+              <div class="cd">Alle documentatie, wachtwoorden, klanten en het logboek worden vervangen door wat in
+                deze back-up staat: ${b.customers ?? "?"} klanten, ${b.items ?? "?"} items, ${b.passwords ?? "?"} wachtwoorden.
+                Wat daarna is veranderd, is dan weg — maar de huidige stand wordt eerst zelf als back-up
+                bewaard, dus dit is terug te draaien.</div>
+              <div style="margin-top:10px;display:flex;gap:8px">
+                <button class="btn sm danger" id="bk-yes">Ja, terugzetten</button>
+                <button class="btn ghost sm" id="bk-no">Annuleren</button></div></div></div>`;
+          cell.querySelector("#bk-no").onclick = () => cell.closest("tr").classList.add("hidden");
+          cell.querySelector("#bk-yes").onclick = async (ev) => {
+            ev.currentTarget.disabled = true;
+            try {
+              await api(`/api/admin/backups/${encodeURIComponent(name)}/restore`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ confirm: name }),
+              });
+              toast("Teruggezet — de pagina wordt opnieuw geladen");
+              setTimeout(() => location.reload(), 1200);
+            } catch (e) { toast(e.message); drawBackups(host); }
+          };
+        }
+      };
+    });
+  }
+
+  function wireBackupButtons(host) {
+    const make = host.querySelector("#bk-make");
+    make.onclick = async () => {
+      make.disabled = true;
+      try {
+        await api("/api/admin/backups", { method: "POST" });
+        toast("Back-up gemaakt");
+        await drawBackups(host);
+      } catch (e) { toast(e.message); }
+      make.disabled = false;
+    };
+    host.querySelector("#bk-upload").onclick = () => {
+      const form = host.querySelector("#bk-up");
+      if (form) form.classList.toggle("hidden");
+    };
+  }
+
+  // A file of ours needs its passphrase; a plain database taken off the volume
+  // by hand needs none, and the field is simply left empty.
+  function wireUpload(host) {
+    const go = host.querySelector("#bk-up-go");
+    if (!go) return;
+    go.onclick = async () => {
+      const file = host.querySelector("#bk-file").files[0];
+      if (!file) { toast("Kies eerst een bestand"); return; }
+      go.disabled = true;
+      toast("Uploaden en controleren…");
+      try {
+        const got = await api("/api/admin/backups/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/octet-stream",
+                     // A header carries Latin-1 only; a passphrase with a € in it must still arrive.
+                     "X-Backup-Passphrase": encodeURIComponent(host.querySelector("#bk-up-pass").value) },
+          body: file,
+        });
+        toast(`Gecontroleerd en klaargezet: ${got.customers} klanten, ${got.items} items`);
+        await drawBackups(host);
+      } catch (e) { toast(e.message); go.disabled = false; }
+    };
+  }
+
   function environmentBlock() {
     const e = data.environment;
     const row = (key, value) => `<div class="dt"><span class="mono">${esc(key)}</span></div>
@@ -341,7 +531,7 @@ window.DocSettings = function (ctx) {
   function paint(host) {
     host.innerHTML = `<div class="settings-grid">
         ${aboutBlock()}${generalBlock()}${rmmBlock()}${m365Block()}
-        ${passwordBlock()}${vaultBlock()}${environmentBlock()}
+        ${passwordBlock()}${vaultBlock()}${backupBlock()}${environmentBlock()}
       </div>`;
     host.querySelectorAll("[data-save]").forEach((b) => {
       b.onclick = () => save(b.dataset.save, host);
@@ -368,6 +558,8 @@ window.DocSettings = function (ctx) {
       button.disabled = false;
     };
     drawUpdate(host);
+    wireBackupButtons(host);
+    drawBackups(host);
   }
 
   async function view(host) {

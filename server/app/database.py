@@ -281,6 +281,18 @@ def init_db() -> None:
     _threadlocal.conn = _conn      # the initialising thread reuses this one
 
 
+def after_restore() -> None:
+    """Bring contents put back from a snapshot up to this version's schema --
+    the snapshot may be from before a column existed."""
+    conn = _new_conn()
+    try:
+        conn.executescript(SCHEMA)
+        _migrate(conn)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _migrate(conn: sqlite3.Connection) -> None:
     """Additive migrations for databases created by an earlier version."""
     cols = {r[1] for r in conn.execute("PRAGMA table_info(secrets)")}
@@ -1084,6 +1096,14 @@ def people_at(org_id: str) -> list:
 # --------------------------------------------------------------------------- #
 def doc_push_state() -> dict:
     return {r["device_id"]: r["hash"] for r in rows("SELECT device_id, hash FROM doc_pushes")}
+
+
+def replace_doc_pushes(state: dict) -> None:
+    now = time.time()
+    with write() as conn:
+        conn.execute("DELETE FROM doc_pushes")
+        conn.executemany("INSERT INTO doc_pushes (device_id, hash, pushed_at) VALUES (?, ?, ?)",
+                         [(device, digest, now) for device, digest in state.items()])
 
 
 def doc_push_done(sent: dict, cleared: list) -> None:

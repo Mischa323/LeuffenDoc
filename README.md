@@ -39,6 +39,7 @@ environment.
 | `DOC_PROXY_IPS` | The address(es) your proxy connects from. Forwarded headers are only believed from there. |
 | `DOC_DEV_LOGIN` | `1` allows a password-free sign-in. Development only; the first account to sign in becomes the administrator. |
 | `DOC_IMAGE` | The image an update from the page pulls. Defaults to the one the container runs, which is what you want. |
+| `DOC_BACKUP_HOURS` / `DOC_BACKUP_KEEP` | How often a snapshot is made in the data volume (24 hours; 0 switches it off) and how many automatic ones are kept (14). Also under **Instellingen → Back-ups**. |
 
 ### Updating from the page
 
@@ -208,6 +209,44 @@ tells you the address it sees you arriving from and names anything still wrong.
 server sees you arriving from and over which scheme, and names anything that is
 off (a proxy whose headers aren't being passed on, a missing public address, a
 cookie that the browser will refuse).
+
+## Back-ups
+
+Copying `leuffendoc.db` while the server runs is not a back-up: SQLite keeps
+the latest changes in a second file (`-wal`), and a copy taken halfway through
+a write can come back broken. So LeuffenDoc makes its own **snapshots**, from
+one consistent moment, into `backups/` in the data volume — every
+`DOC_BACKUP_HOURS`, keeping the newest `DOC_BACKUP_KEEP`. Back up the volume as
+you would anyway and those files are what you restore from.
+
+**Instellingen → Back-ups** lists them, makes one on the spot, and downloads
+one — always encrypted with a passphrase you choose, since it holds every
+customer's documentation and, without `DOC_SECRET_KEY` in the environment, the
+vault's key as well. Keep the passphrase somewhere other than the file.
+
+**Putting one back** is done on the same page: upload the file, it is checked
+(whole, a LeuffenDoc database, and passwords that open with the key that will
+be in force), then **Terugzetten**. The contents are replaced in place; the
+state just before is kept as a snapshot of its own, so it can be undone. On a
+new server: start LeuffenDoc with the same `DOC_SECRET_KEY` if you had one set,
+sign in as a `DOC_BOOTSTRAP_ADMIN`, and upload.
+
+A `.ldbak` file can be opened without LeuffenDoc. It is a line
+`LEUFFENDOC-BACKUP`, a line of JSON, and then the SQLite database, gzipped and
+encrypted with AES-256-GCM; the key is scrypt of the passphrase with the
+parameters in the JSON, which is itself the associated data:
+
+```python
+import base64, gzip, hashlib, json, sys
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+data = open(sys.argv[1], "rb").read().split(b"\n", 2)       # magic, header, body
+head = json.loads(data[1])
+key = hashlib.scrypt(sys.argv[2].encode(), salt=base64.b64decode(head["salt"]),
+                     n=head["n"], r=head["r"], p=head["p"], maxmem=2**27, dklen=32)
+plain = AESGCM(key).decrypt(base64.b64decode(head["nonce"]), data[2], data[1])
+open("leuffendoc.db", "wb").write(gzip.decompress(plain))
+```
 
 ## Where things live
 

@@ -59,6 +59,10 @@ SPEC: dict[str, dict] = {
                           "min": 5, "max": 600},
     "PW_MAX_AGE_DAYS": {"group": "wachtwoorden", "type": "int", "default": 365,
                         "min": 0, "max": 3650},
+
+    # -- Back-ups
+    "DOC_BACKUP_HOURS": {"group": "backup", "type": "int", "default": 24, "min": 0, "max": 720},
+    "DOC_BACKUP_KEEP": {"group": "backup", "type": "int", "default": 14, "min": 1, "max": 365},
 }
 
 # Settings every signed-in person's browser needs, and nothing more: how to

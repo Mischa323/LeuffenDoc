@@ -17,13 +17,15 @@ import logging
 import os
 import secrets
 import time
+import urllib.parse
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, RedirectResponse,
+                               Response)
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, database, docpush, m365, rmm, schema, settings, strength, vault
+from . import auth, backup, database, docpush, m365, rmm, schema, settings, strength, vault
 
 log = logging.getLogger("leuffendoc")
 
@@ -72,6 +74,28 @@ async def _sync_loop() -> None:
                 await asyncio.to_thread(docpush.push)
 
 
+# How the last automatic back-up went, for the settings page.
+backup_status: dict = {"at": None, "ok": None, "detail": None}
+
+
+async def _backup_loop() -> None:
+    """A snapshot every DOC_BACKUP_HOURS, the oldest automatic ones pruned.
+    Checked every ten minutes, so a changed interval takes effect without a
+    restart, and a server that was down catches up when it comes back."""
+    while True:
+        try:
+            hours = int(settings.get("DOC_BACKUP_HOURS"))
+            last = backup.last_auto()
+            if hours > 0 and (last is None or time.time() - last >= hours * 3600):
+                made = await asyncio.to_thread(backup.snapshot, "auto")
+                await asyncio.to_thread(backup.prune, int(settings.get("DOC_BACKUP_KEEP")))
+                backup_status.update(at=time.time(), ok=True, detail=made["name"])
+        except Exception as exc:                  # a full disk must not stop the server
+            log.warning("automatic back-up failed: %r", exc)
+            backup_status.update(at=time.time(), ok=False, detail=f"{type(exc).__name__}: {exc}"[:200])
+        await asyncio.sleep(600)
+
+
 async def _note_changes(request: Request, call_next):
     """Any change that went through asks for the RMM's Docs tab to be brought
     up to date. Which change affects which machine is not worked out here: a
@@ -92,8 +116,10 @@ async def lifespan(_app: FastAPI):
     from . import docker_update
     asyncio.create_task(asyncio.to_thread(docker_update.remember_own_image))
     task = asyncio.create_task(_sync_loop())
+    backups = asyncio.create_task(_backup_loop())
     yield
     task.cancel()
+    backups.cancel()
 
 
 app = FastAPI(title="LeuffenDoc", version=VERSION, lifespan=lifespan)
@@ -1378,6 +1404,96 @@ def update_apply(request: Request, user: dict = Depends(auth.current_user)):
     database.audit("server.update", user_email=user["email"],
                    detail=f"van {VERSION}", ip=auth.client_ip(request))
     return {"version": VERSION, **result}
+
+
+# --------------------------------------------------------------------------- #
+# Back-ups (see backup.py)
+# --------------------------------------------------------------------------- #
+def _backup_error(exc: ValueError) -> HTTPException:
+    return HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/admin/backups")
+def list_backups(user: dict = Depends(auth.current_user)):
+    auth.require_admin(user)
+    return {"backups": backup.list_backups(), "folder": backup.folder(),
+            "every_hours": settings.get("DOC_BACKUP_HOURS"), "keep": settings.get("DOC_BACKUP_KEEP"),
+            "last_auto": backup_status, "key": vault.state()}
+
+
+@app.post("/api/admin/backups")
+def make_backup(request: Request, user: dict = Depends(auth.current_user)):
+    auth.require_admin(user)
+    made = backup.snapshot("handmatig")
+    database.audit("backup.create", user_email=user["email"], detail=made["name"],
+                   ip=auth.client_ip(request))
+    return made
+
+
+@app.delete("/api/admin/backups/{name}")
+def delete_backup(name: str, request: Request, user: dict = Depends(auth.current_user)):
+    auth.require_admin(user)
+    try:
+        backup.delete(name)
+    except ValueError as exc:
+        raise _backup_error(exc)
+    database.audit("backup.delete", user_email=user["email"], detail=name, ip=auth.client_ip(request))
+    return {"deleted": name}
+
+
+@app.post("/api/admin/backups/{name}/download")
+async def download_backup(name: str, request: Request, user: dict = Depends(auth.current_user)):
+    """A snapshot to take away, encrypted with a passphrase chosen now. Never
+    handed out as it is: it holds every customer's documentation, and the key
+    to the vault too when that is not in the environment."""
+    auth.require_admin(user)
+    body = await request.json()
+    try:
+        sealed = await asyncio.to_thread(backup.seal_file, name, body.get("passphrase") or "")
+    except ValueError as exc:
+        raise _backup_error(exc)
+    database.audit("backup.download", user_email=user["email"], detail=name,
+                   ip=auth.client_ip(request))
+    stamp = time.strftime("%Y-%m-%d-%H%M", time.localtime(backup.info(name)["made_at"]))
+    return Response(sealed, media_type="application/octet-stream", headers={
+        "Content-Disposition": f'attachment; filename="leuffendoc-{stamp}.ldbak"',
+        "Cache-Control": "no-store"})
+
+
+@app.post("/api/admin/backups/upload")
+async def upload_backup(request: Request, user: dict = Depends(auth.current_user)):
+    """A back-up brought back: the file as the body, the passphrase in a
+    header. It is checked and kept as a snapshot; putting it back is a
+    separate, deliberate step."""
+    auth.require_admin(user)
+    data = await request.body()
+    try:
+        received = await asyncio.to_thread(
+            backup.receive, data,
+            urllib.parse.unquote(request.headers.get("x-backup-passphrase") or ""))
+    except ValueError as exc:
+        raise _backup_error(exc)
+    database.audit("backup.upload", user_email=user["email"], detail=received["name"],
+                   ip=auth.client_ip(request))
+    return received
+
+
+@app.post("/api/admin/backups/{name}/restore")
+async def restore_backup(name: str, request: Request, user: dict = Depends(auth.current_user)):
+    auth.require_admin(user)
+    body = await request.json()
+    if body.get("confirm") != name:
+        raise HTTPException(status_code=400, detail="Bevestig welke back-up teruggezet wordt")
+    try:
+        result = await asyncio.to_thread(backup.restore, name)
+    except ValueError as exc:
+        raise _backup_error(exc)
+    # Written after the restore, so the log that is now in force records it.
+    database.audit("backup.restore", user_email=user["email"],
+                   detail=f"{name}; de stand ervoor staat in {result['before']['name']}",
+                   ip=auth.client_ip(request))
+    docpush.soon()
+    return result
 
 
 # --------------------------------------------------------------------------- #
