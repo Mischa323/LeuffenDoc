@@ -25,7 +25,8 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, Redirec
                                Response)
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, backup, database, docpush, m365, rmm, schema, settings, strength, vault
+from . import (auth, backup, database, docpush, export, m365, rmm, schema, settings, strength,
+               vault)
 
 log = logging.getLogger("leuffendoc")
 
@@ -1404,6 +1405,31 @@ def update_apply(request: Request, user: dict = Depends(auth.current_user)):
     database.audit("server.update", user_email=user["email"],
                    detail=f"van {VERSION}", ip=auth.client_ip(request))
     return {"version": VERSION, **result}
+
+
+# --------------------------------------------------------------------------- #
+# Exporting a customer (see export.py)
+# --------------------------------------------------------------------------- #
+@app.post("/api/orgs/{org_id}/export")
+async def export_org(org_id: str, request: Request, user: dict = Depends(auth.current_user)):
+    """Everything this person may see at one customer, as a zip. Passwords only
+    on request, only for someone who may read them, and each one in the log."""
+    body = await request.json() if await request.body() else {}
+    with_passwords = bool(body.get("passwords"))
+    org = _may_see(user, org_id, "reveal" if with_passwords else "read")
+    name, data, read = await asyncio.to_thread(export.build, org, _hidden(user), with_passwords,
+                                               user["email"])
+    ip = auth.client_ip(request)
+    for item, label in read:
+        database.audit("secret.export", user_email=user["email"], org_id=org_id,
+                       target=item["name"], detail=label, ip=ip)
+    database.audit("org.export", user_email=user["email"], org_id=org_id, target=org["name"],
+                   detail=f"met {len(read)} wachtwoord(en)" if with_passwords else "zonder wachtwoorden",
+                   ip=ip)
+    quoted = urllib.parse.quote(name)
+    return Response(data, media_type="application/zip", headers={
+        "Content-Disposition": f"attachment; filename=\"{name}\"; filename*=UTF-8''{quoted}",
+        "Cache-Control": "no-store"})
 
 
 # --------------------------------------------------------------------------- #

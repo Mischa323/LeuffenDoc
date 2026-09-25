@@ -305,6 +305,61 @@
       </div>`;
   }
 
+  /* A customer's documentation to take away: one zip with a page to read and
+     print, the data as JSON, and a sheet per kind. Passwords only when asked
+     for -- the file then holds them in plain text, which is said here, before
+     anyone presses the button. */
+  function exportPanel() {
+    const o = state.org;
+    const reveal = !o.may || o.may.reveal;
+    const old = $("export-panel");
+    if (old) { old.remove(); return; }
+    const panel = document.createElement("div");
+    panel.id = "export-panel";
+    panel.className = "panel export-panel";
+    panel.innerHTML = `<div class="panel-head"><h2>Exporteren</h2>
+        <span class="sub">Alles wat je bij ${esc(o.name)} mag zien, in één zip</span></div>
+      <div class="form-body">
+        <p class="muted" style="margin:0 0 12px;font-size:13px;line-height:1.6">Een pagina om te lezen en af te
+          drukken, de gegevens als JSON, en per soort een CSV voor Excel. Wat afgeschermd is voor anderen dan
+          jou staat er niet in.</p>
+        <label class="boolrow"><input type="checkbox" id="export-pw"${reveal ? "" : " disabled"} />
+          <span>Wachtwoorden meenemen${reveal ? "" : " — je rol bij deze klant geeft geen toegang tot wachtwoorden"}</span></label>
+        <div class="callout warn hidden" id="export-pw-warn" style="margin-top:10px"><div class="ic">${ICON.alert}</div>
+          <div class="cd">Het bestand bevat de wachtwoorden dan leesbaar, zonder versleuteling. Elk wachtwoord komt
+            in het logboek. Verstuur het alleen langs een veilige weg en ruim het op als het er niet meer hoeft te zijn.</div></div>
+      </div>
+      <div class="blk-foot"><div style="flex:1"></div>
+        <button class="btn ghost sm" id="export-cancel">Annuleren</button>
+        <button class="btn sm" id="export-go">${ICON.download} Zip downloaden</button></div>`;
+    $("view").prepend(panel);
+    $("export-pw").onchange = () => $("export-pw-warn").classList.toggle("hidden", !$("export-pw").checked);
+    $("export-cancel").onclick = () => panel.remove();
+    $("export-go").onclick = async (ev) => {
+      const button = ev.currentTarget;
+      button.disabled = true;
+      try {
+        const res = await fetch(`/api/orgs/${o.id}/export`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ passwords: $("export-pw").checked }),
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `${res.status}`);
+        const disposition = res.headers.get("Content-Disposition") || "";
+        const match = disposition.match(/filename="([^"]+)"/);
+        const url = URL.createObjectURL(await res.blob());
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = match ? match[1] : "documentatie.zip";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        toast("Export gedownload");
+        panel.remove();
+      } catch (e) { toast(e.message); button.disabled = false; }
+    };
+  }
+
   // What the server makes of the connection. Behind a reverse proxy this is
   // the fastest way to see whether it is passing its headers on -- and the
   // audit log is only worth reading if the address in it is the visitor's.
@@ -411,6 +466,9 @@
       }
 
       if (tab.id === "overzicht") {
+        $("page-actions").innerHTML =
+          `<button class="btn ghost sm" id="export-org">${ICON.download} Exporteren</button>`;
+        $("export-org").onclick = () => exportPanel();
         $("view").innerHTML = await overviewView();
         $("view").querySelectorAll("[data-tab]").forEach((el) => {
           el.onclick = () => go(`#/klant/${state.org.id}/${el.dataset.tab}`);

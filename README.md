@@ -210,6 +210,16 @@ server sees you arriving from and over which scheme, and names anything that is
 off (a proxy whose headers aren't being passed on, a missing public address, a
 cookie that the browser will refuse).
 
+## Exporting a customer
+
+**Exporteren** on a customer's overview gives a zip: `documentatie.html` to read
+and print (it needs no server), `data.json` with everything structured, and
+`csv/` with a sheet per kind, semicolon-separated with a byte-order mark so
+Excel on a Dutch machine opens it as columns. Only what the person exporting
+may see goes in. Passwords go in only when ticked, only for someone whose role
+allows reading them — then the file holds them in plain text, and every one of
+them is written in the log.
+
 ## Back-ups
 
 Copying `leuffendoc.db` while the server runs is not a back-up: SQLite keeps
