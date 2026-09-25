@@ -98,6 +98,13 @@ Users, customers and access are pulled from the RMM every `DOC_SYNC_MINUTES`
 and whenever somebody signs in, so access withdrawn there disappears here.
 **Klanten** shows the state of that link, with a button to sync on the spot.
 
+The other way round, what is documented about each machine is sent to the RMM,
+where its device drawer shows it under **Docs** — with the same API key, so
+nothing extra to set up. It goes within seconds of a change, and only for the
+machines whose summary changed. Passwords never go, and neither does anything
+shut off to named colleagues. Set `DOC_PUBLIC_URL` so the links in that tab
+point at this server; without it the RMM uses its own `RMM_DOC_URL`.
+
 ## Sharing a password with someone outside
 
 **Delen** on a password makes a link for someone without an account — a

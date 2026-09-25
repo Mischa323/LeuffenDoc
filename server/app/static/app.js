@@ -554,11 +554,16 @@
     }
     const when = s.at ? ago(Date.now() / 1000 - s.at) : "nog niet";
     const bad = s.ok === false;
+    // What the RMM shows under Docs in its device drawer is sent from here.
+    const docs = s.docs || {};
+    const docsLine = docs.ok === false
+      ? `<div style="margin-top:6px;color:var(--warn)">Documentatie naar de RMM sturen lukt niet: ${esc(docs.detail)}</div>`
+      : docs.ok ? `<div style="margin-top:6px">De RMM toont wat hier over ${docs.devices === 1 ? "1 apparaat" : `${docs.devices} apparaten`} is vastgelegd, onder <b>Docs</b> in het apparaatpaneel.</div>` : "";
     host.innerHTML = `<div class="callout ${bad ? "warn" : "info"}" style="margin-bottom:16px">
       <div class="ic">${bad ? ICON.alert : ICON.refresh}</div><div style="flex:1">
       <div class="ct">${bad ? "De RMM antwoordt niet" : "Gekoppeld aan de RMM"}</div>
       <div class="cd">${bad ? esc(s.detail) : `${s.users} gebruikers en ${s.orgs} klanten, bijgewerkt ${when}. Elke ${s.every_minutes} minuten opnieuw.`}
-        <button class="btn ghost sm" id="sync-now" style="margin-left:10px">Nu bijwerken</button></div>
+        <button class="btn ghost sm" id="sync-now" style="margin-left:10px">Nu bijwerken</button>${docsLine}</div>
       </div></div>`;
     $("sync-now").onclick = async () => {
       $("sync-now").disabled = true;

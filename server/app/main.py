@@ -23,7 +23,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, database, m365, rmm, schema, settings, strength, vault
+from . import auth, database, docpush, m365, rmm, schema, settings, strength, vault
 
 log = logging.getLogger("leuffendoc")
 
@@ -62,7 +62,26 @@ async def _sync_loop() -> None:
             await asyncio.to_thread(database.forget_spent_shares)
         except Exception as exc:
             log.warning("clearing spent share links failed: %r", exc)
-        await asyncio.sleep(max(60, int(settings.get("DOC_SYNC_MINUTES")) * 60))
+        await asyncio.to_thread(docpush.push)
+        # Until the next round, send what someone changes here within seconds:
+        # the RMM's Docs tab should not be a quarter of an hour behind.
+        until = time.monotonic() + max(60, int(settings.get("DOC_SYNC_MINUTES")) * 60)
+        while time.monotonic() < until:
+            await asyncio.sleep(1)
+            if docpush.due():
+                await asyncio.to_thread(docpush.push)
+
+
+async def _note_changes(request: Request, call_next):
+    """Any change that went through asks for the RMM's Docs tab to be brought
+    up to date. Which change affects which machine is not worked out here: a
+    round compares what it would send with what it sent, and sends only the
+    difference."""
+    response = await call_next(request)
+    if (request.method in ("POST", "PUT", "PATCH", "DELETE")
+            and request.url.path.startswith("/api/") and response.status_code < 400):
+        docpush.soon()
+    return response
 
 
 @asynccontextmanager
@@ -78,6 +97,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="LeuffenDoc", version=VERSION, lifespan=lifespan)
+app.middleware("http")(_note_changes)
 
 
 def _serve_html(filename: str) -> HTMLResponse:
@@ -330,7 +350,8 @@ def rmm_status(user: dict = Depends(auth.current_user)):
     """Whether the RMM link is set up, and how the last sync went."""
     auth.require_admin(user)
     return {"configured": rmm.configured(), "url": rmm.base_url() or None,
-            "every_minutes": settings.get("DOC_SYNC_MINUTES"), **rmm.last_sync}
+            "every_minutes": settings.get("DOC_SYNC_MINUTES"), **rmm.last_sync,
+            "docs": dict(docpush.last_push)}
 
 
 @app.post("/api/rmm/sync")
@@ -342,6 +363,7 @@ async def rmm_sync_now(request: Request, user: dict = Depends(auth.current_user)
         return JSONResponse({"detail": "De koppeling met de RMM is niet ingesteld"},
                             status_code=400)
     result = await asyncio.to_thread(rmm.sync)
+    await asyncio.to_thread(docpush.push)
     database.audit("rmm.sync.manual", user_email=user["email"], ip=auth.client_ip(request))
     return result
 

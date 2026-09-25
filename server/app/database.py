@@ -231,6 +231,14 @@ CREATE TABLE IF NOT EXISTS shares (
 );
 CREATE INDEX IF NOT EXISTS idx_shares_item ON shares(item_id);
 
+-- What was last sent to the RMM about each machine, as a hash: a round only
+-- sends what changed since.
+CREATE TABLE IF NOT EXISTS doc_pushes (
+    device_id TEXT PRIMARY KEY,
+    hash      TEXT NOT NULL,
+    pushed_at REAL NOT NULL
+);
+
 -- Types people define themselves. The built-in ones live in schema.py; these
 -- join them at run time and are rendered by exactly the same code, which is
 -- why the interface needs nothing new to show one.
@@ -595,8 +603,8 @@ def update_item(item_id: str, name: str | None = None, fields: dict | None = Non
         changes = _diff({"naam": r["name"], **before_fields},
                         {"naam": after_name, **after_fields},
                         lambda key: "Naam" if key == "naam" else label(key))
-        sets = ["name=?", "fields_json=?", "updated_at=?", "updated_by=?"]
-        args: list = [after_name, json.dumps(after_fields), now, by]
+        sets = ["name=?", "fields_json=?"]
+        args: list = [after_name, json.dumps(after_fields)]
         if rmm is not None:
             # What the RMM reports is history too: "memory 8 -> 16 GB" is worth
             # having, and nobody had to keep it up. Only the keys that are
@@ -610,6 +618,12 @@ def update_item(item_id: str, name: str | None = None, fields: dict | None = Non
         if rmm_gone is not None:
             sets.append("rmm_gone=?")
             args.append(int(rmm_gone))
+        # Only a change that moved something makes an item "last changed": a
+        # sync that finds the machine as it was must not make every machine
+        # look edited by nobody a minute ago.
+        if changes:
+            sets += ["updated_at=?", "updated_by=?"]
+            args += [now, by]
         conn.execute(f"UPDATE items SET {', '.join(sets)} WHERE id=?", (*args, item_id))
         # Nothing moved means nothing to write down; a sync that changes nothing
         # should not fill the history with empty lines.
@@ -1063,6 +1077,24 @@ def people_at(org_id: str) -> list:
     return rows(
         "SELECT email, display_name, is_admin FROM users WHERE is_admin=1 OR email IN "
         "(SELECT user_email FROM org_users WHERE org_id=?) ORDER BY email", (org_id,))
+
+
+# --------------------------------------------------------------------------- #
+# Documentation sent to the RMM
+# --------------------------------------------------------------------------- #
+def doc_push_state() -> dict:
+    return {r["device_id"]: r["hash"] for r in rows("SELECT device_id, hash FROM doc_pushes")}
+
+
+def doc_push_done(sent: dict, cleared: list) -> None:
+    now = time.time()
+    with write() as conn:
+        for device_id, digest in sent.items():
+            conn.execute("INSERT INTO doc_pushes (device_id, hash, pushed_at) VALUES (?, ?, ?) "
+                         "ON CONFLICT(device_id) DO UPDATE SET hash=excluded.hash, "
+                         "pushed_at=excluded.pushed_at", (device_id, digest, now))
+        for device_id in cleared:
+            conn.execute("DELETE FROM doc_pushes WHERE device_id=?", (device_id,))
 
 
 # --------------------------------------------------------------------------- #
