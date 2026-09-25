@@ -258,6 +258,18 @@ plain = AESGCM(key).decrypt(base64.b64decode(head["nonce"]), data[2], data[1])
 open("leuffendoc.db", "wb").write(gzip.decompress(plain))
 ```
 
+## Tests
+
+```sh
+pip install -r requirements.txt pytest
+python -m pytest server/tests
+```
+
+They run against a real LeuffenDoc on a throw-away database — the vault,
+who may see and read what, share links, back-ups and putting one back, the
+export, and what is sent to the RMM — in a few seconds. GitHub Actions runs
+them on every push, and only builds the image when they pass.
+
 ## Where things live
 
 ```
@@ -265,6 +277,7 @@ server/app/main.py       every HTTP endpoint
 server/app/database.py   SQLite schema, migrations and queries
 server/app/auth.py       sessions and the sign-in plumbing
 server/app/static/       the interface (no build step)
+server/tests/            the test suite (pytest)
 ```
 
 The data volume holds the database, uploaded files and the vault's master key.

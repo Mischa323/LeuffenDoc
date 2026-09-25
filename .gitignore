@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 .venv/
+.pytest_cache/
 venv/
 
 # Local data: the database, uploaded files and the vault's master key all live
