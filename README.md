@@ -9,37 +9,59 @@ with its own data volume.
 
 ## Running it
 
-```sh
-docker compose up -d      # http://localhost:8100
+The container needs an image, a port and a volume — nothing else:
+
+```yaml
+services:
+  leuffendoc:
+    image: ghcr.io/mischa323/leuffendoc:latest
+    ports:
+      - "8100:8000"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
 ```
 
-Most of it can be set under **Instellingen** in the app itself, by an
-administrator: the link with the RMM, Microsoft 365, the public address, how
-passwords are generated and how long one stays on screen, and when a date
-starts to warn. Those land in the database, and the two secrets among them
-(the RMM's API key, the Microsoft 365 client secret) are stored sealed with the
-vault's key. An environment variable always wins over a saved value, and the
-page shows such a value as fixed rather than letting you type into a field that
-is then ignored. What decides whether anyone can reach the page at all — the
-proxy, cookies, the bootstrap administrators — can only be set here, in the
-environment.
+(In Dockge: **+ Compose**, paste this, **Deploy**.) The first time you open it,
+it shows a **set-up screen**:
+
+1. **The set-up code.** It is printed in the container's log — on the stack's
+   page in Dockge, or `docker logs leuffendoc`. Until set-up is done anyone who
+   reaches the page could claim the server, so only whoever runs the container
+   can. Five wrong tries and a new code is printed.
+2. **The RMM's address, and one button.** **Koppelen met de RMM** sends you to
+   the RMM, which asks a global administrator to approve. It then issues
+   LeuffenDoc's API key and records LeuffenDoc's address on its side (the Docs
+   button, the drawer's Docs tab, the permitted sign-in return). The key never
+   passes through the browser: the browser carries a single-use code, which
+   this server exchanges — together with a secret only it holds — over its own
+   connection. Whoever approves administers LeuffenDoc and is signed in.
+
+The rest is filled in from what the server sees of that very request: its own
+address, whether a reverse proxy is in front and from which address it
+connects, and https-only cookies when you arrive over https. **Zelf aanpassen**
+changes any of it. If this server cannot reach the RMM at the address your
+browser uses — a NAS that does not reach its own public name, or an RMM with a
+self-signed certificate — the page says so after you approve and asks for one
+that works, such as the LAN address and port. An RMM without the one-button
+link, or Microsoft 365 on its own, can be set up by hand on the same screen.
+
+Everything lands in the database and is changed later under **Instellingen**;
+**Koppelen** there links again, with another RMM or after a key was revoked.
+The RMM can start it too: **Settings → API & webhooks → LeuffenDoc → Link with
+LeuffenDoc**.
+
+Environment variables are no longer needed, but still work, and win over what
+is saved — to pin a value, or to get back in:
 
 | Variable | What it does |
 |---|---|
-| `DOC_PUBLIC_URL` | The address people reach this server at. Sign-in redirects are built from it. |
-| `DOC_RMM_URL` + `DOC_RMM_API_KEY` | Sign in through the RMM, and mirror its users, customers and permissions. The key is made under **Settings → API & webhooks** in the RMM. |
-| `DOC_RMM_PUBLIC_URL` | Where a *browser* reaches the RMM, when that differs from the address this server uses (an internal network, say). Defaults to `DOC_RMM_URL`. |
-| `DOC_SYNC_MINUTES` | How often to pull users and customers from the RMM. Default 15. |
-| `DOC_M365_TENANT` / `DOC_M365_CLIENT_ID` / `DOC_M365_CLIENT_SECRET` | Microsoft 365 sign-in, the fallback for when the RMM is unreachable. |
-| `DOC_BOOTSTRAP_ADMIN` | Addresses (comma separated) that are always administrators, whatever the database says — how a fresh install is set up, and the way back in if nobody is left with the rights. |
-| `DOC_SECRET_KEY` | The master key of the password vault. Set it to a 32-byte key (base64 or hex) or a passphrase, and **keep it somewhere other than the database backup** — a backup that holds both the vault and its key protects nothing. Left unset, a key is generated and stored in the database, and the **Wachtwoorden** page says so. Change it and the existing passwords can no longer be opened, so set it before you start filling the vault. |
-| `DOC_SESSION_SECRET` | Signs session cookies. Generated into the data volume on first boot if unset. |
-| `DOC_SECURE_COOKIES` | `1` by default. Only set to `0` for local HTTP development. |
-| `DOC_TRUST_PROXY` | `1` behind a reverse proxy, so the audit log records the visitor rather than the proxy. `0` if the container is reachable directly. |
-| `DOC_PROXY_IPS` | The address(es) your proxy connects from. Forwarded headers are only believed from there. |
-| `DOC_DEV_LOGIN` | `1` allows a password-free sign-in. Development only; the first account to sign in becomes the administrator. |
-| `DOC_IMAGE` | The image an update from the page pulls. Defaults to the one the container runs, which is what you want. |
-| `DOC_BACKUP_HOURS` / `DOC_BACKUP_KEEP` | How often a snapshot is made in the data volume (24 hours; 0 switches it off) and how many automatic ones are kept (14). Also under **Instellingen → Back-ups**. |
+| `DOC_BOOTSTRAP_ADMIN` | Addresses (comma separated) that are always administrators, on top of those chosen at set-up — the way back in if nobody is left with the rights. |
+| `DOC_SECRET_KEY` | The master key of the password vault, to keep it out of the database. Set it to a 32-byte key (base64 or hex) or a passphrase, and **keep it somewhere other than the database backup**. Left unset, a key is generated and stored in the database — fine with the encrypted back-ups, and what the set-up screen says it does. Change it and the existing passwords can no longer be opened, so decide before you start filling the vault. |
+| `DOC_PUBLIC_URL`, `DOC_RMM_URL`, `DOC_RMM_API_KEY`, `DOC_RMM_PUBLIC_URL`, `DOC_RMM_INSECURE_TLS`, `DOC_SYNC_MINUTES`, `DOC_M365_*`, `DOC_TRUST_PROXY`, `DOC_PROXY_IPS`, `DOC_SECURE_COOKIES`, `DOC_SESSION_DAYS`, `DOC_BACKUP_HOURS`, `DOC_BACKUP_KEEP`, `PW_*` | Everything on the set-up screen and under **Instellingen**, pinned. The page then shows the value as fixed rather than offering a field that would be ignored. A container started with `DOC_RMM_URL`, `DOC_PUBLIC_URL` or `DOC_BOOTSTRAP_ADMIN` skips the set-up screen. |
+| `DOC_SESSION_SECRET` | Signs session cookies. Generated into the database if unset. |
+| `DOC_DEV_LOGIN` | `1` allows a password-free sign-in. Development only. |
+| `DOC_IMAGE` | The image an update from the page pulls. Defaults to the one the container runs. |
 
 ### Updating from the page
 
@@ -81,13 +103,11 @@ that ticket over its own connection using the API key, so a ticket left in a
 browser's history is worth nothing by itself. Their customers and whether they
 are an administrator come across in the same answer.
 
-Set up:
-
-1. In the RMM, **Settings → API & webhooks**, make a key that spans all
-   organisations, and put it in `DOC_RMM_API_KEY` with `DOC_RMM_URL`.
-2. On the RMM server, set `RMM_SSO_RETURN_URLS` to LeuffenDoc's address
-   (`https://doc.example.com`). Anything not on that list is refused: without
-   it the hand-off would send a valid ticket wherever a link said.
+Linking with one button (see *Running it*) sets up both sides. By hand
+instead: make a key under **Settings → API & webhooks** in the RMM that spans
+all organisations, fill it in with the RMM's address under **Instellingen**
+here, and fill in LeuffenDoc's address in the RMM under **Settings → API &
+webhooks → LeuffenDoc** — the RMM hands a sign-in ticket to no other address.
 
 **With Microsoft 365** — the fallback for when the RMM is unreachable, or for
 someone with no RMM account. They arrive with **no customers**; what they may
@@ -103,8 +123,8 @@ The other way round, what is documented about each machine is sent to the RMM,
 where its device drawer shows it under **Docs** — with the same API key, so
 nothing extra to set up. It goes within seconds of a change, and only for the
 machines whose summary changed. Passwords never go, and neither does anything
-shut off to named colleagues. Set `DOC_PUBLIC_URL` so the links in that tab
-point at this server; without it the RMM uses its own `RMM_DOC_URL`.
+shut off to named colleagues. The links in that tab point at LeuffenDoc's
+own address, as chosen at set-up.
 
 ## Sharing a password with someone outside
 
@@ -172,18 +192,20 @@ Caddy: `reverse_proxy 127.0.0.1:8100 { header_up X-Forwarded-For {remote_host} }
 `X-Forwarded-For` is a header like any other — a visitor's browser can send one.
 Two things keep that from ending up in the log as their address:
 
-1. **`DOC_PROXY_IPS`** — the address your proxy connects from. Forwarded headers
-   are believed only on connections coming from there, so someone reaching the
-   container directly cannot dictate their own address. Left unset it means
-   "any", which is only safe while nothing but the proxy can reach the
-   container.
+1. **The proxy's address** (Instellingen → Toegang) — where your proxy
+   connects from. Forwarded headers are believed only on connections from
+   there, so someone reaching the container directly cannot dictate their own
+   address. Empty means "any", which is only safe while nothing but the proxy
+   can reach the container. Setting up through the proxy fills it in.
 2. **Overwriting, not appending.** nginx's usual `$proxy_add_x_forwarded_for`
    *appends* to whatever the browser sent, and the oldest entry in that list —
    the visitor's own claim — is the one that counts as the client. Setting
    `$remote_addr` replaces the whole thing with the address nginx actually saw.
 
-`DOC_TRUST_PROXY=0` switches the headers off entirely; the log then records the
-proxy's address for everyone.
+Switching the reverse proxy off under Instellingen → Toegang ignores the
+headers entirely; the log then records the proxy's address for everyone. The
+app resolves all of this itself, per request, so a change there takes effect
+without a restart.
 
 ### Synology DSM as the reverse proxy
 
@@ -200,10 +222,11 @@ Header**:
 (The **Create → WebSocket** preset adds `Upgrade`/`Connection`. LeuffenDoc
 doesn't use WebSockets, so it needs neither — the RMM on the same NAS does.)
 
-Then set `DOC_PROXY_IPS` to the address DSM's proxy connects from: for a
-container on the same NAS that is the Docker bridge gateway (commonly
-`172.17.0.1`), not the NAS's LAN address. Afterwards open **Logboek**, which
-tells you the address it sees you arriving from and names anything still wrong.
+The proxy's address is then the gateway of the container's Docker network
+(something like `172.20.0.1` — each Dockge stack has its own network), not the
+NAS's LAN address. Set up through DSM's proxy and the set-up screen fills it
+in; otherwise **Logboek** says which address it sees and **Instellingen →
+Toegang** takes it.
 
 **Check it worked:** sign in and open **Logboek**. It says which address the
 server sees you arriving from and over which scheme, and names anything that is

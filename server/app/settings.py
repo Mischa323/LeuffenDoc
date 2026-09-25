@@ -33,6 +33,13 @@ SPEC: dict[str, dict] = {
     "EXPIRY_WARN_DAYS": {"group": "algemeen", "type": "int", "default": 60,
                          "min": 1, "max": 365},
 
+    # -- Reaching the server: the reverse proxy, cookies, who administers it
+    "DOC_TRUST_PROXY": {"group": "toegang", "type": "bool", "default": False},
+    "DOC_PROXY_IPS": {"group": "toegang", "type": "text", "default": ""},
+    "DOC_SECURE_COOKIES": {"group": "toegang", "type": "bool", "default": True},
+    "DOC_BOOTSTRAP_ADMIN": {"group": "toegang", "type": "text", "default": ""},
+    "DOC_SESSION_DAYS": {"group": "toegang", "type": "int", "default": 30, "min": 1, "max": 365},
+
     # -- The RMM link
     "DOC_RMM_URL": {"group": "rmm", "type": "url", "default": ""},
     "DOC_RMM_PUBLIC_URL": {"group": "rmm", "type": "url", "default": ""},

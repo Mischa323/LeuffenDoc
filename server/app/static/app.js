@@ -367,15 +367,15 @@
     const rows = [];
     if (!d.public_url) {
       rows.push(["warn", "Het openbare adres is niet ingesteld",
-        "Zet <code>DOC_PUBLIC_URL</code> op het https-adres waar mensen binnenkomen. Aanmeldingen springen anders terug naar een adres dat niet werkt."]);
+        "Vul onder <b>Instellingen → Algemeen</b> het https-adres in waar mensen binnenkomen. Aanmeldingen springen anders terug naar een adres dat niet werkt."]);
     }
     if (d.forwarded_for && !d.trust_proxy) {
       rows.push(["warn", "Er staat een proxy voor, maar die wordt niet vertrouwd",
-        `Het logboek schrijft nu <b class="mono">${esc(d.client_ip)}</b> op — de proxy zelf, niet de bezoeker. Zet <code>DOC_TRUST_PROXY=1</code>.`]);
+        `Het logboek schrijft nu <b class="mono">${esc(d.client_ip)}</b> op — de proxy zelf, niet de bezoeker. Zet onder <b>Instellingen → Toegang</b> de reverse proxy aan.`]);
     }
     if (d.trust_proxy && !d.forwarded_for) {
       rows.push(["warn", "Vertrouwde proxy, maar geen doorgestuurd adres",
-        "<code>DOC_TRUST_PROXY</code> staat aan terwijl er geen <code>X-Forwarded-For</code> binnenkomt. Laat de proxy die meesturen, of zet de instelling uit."]);
+        "De reverse proxy staat aan terwijl er geen <code>X-Forwarded-For</code> binnenkomt. Laat de proxy die meesturen, of zet hem uit onder <b>Instellingen → Toegang</b>."]);
     }
     if (d.trust_proxy && d.forwarded_hops > 1) {
       rows.push(["warn", "De proxy plakt adressen aan elkaar",
@@ -383,7 +383,7 @@
     }
     if (d.trust_proxy && d.proxy_ips === "*") {
       rows.push(["warn", "Elk adres mag zich als proxy voordoen",
-        "Zet <code>DOC_PROXY_IPS</code> op het adres van je proxy. Anders kan iemand die de container rechtstreeks bereikt zelf bepalen welk adres in het logboek komt."]);
+        `Je proxy komt binnen vanaf <b class="mono">${esc(d.peer || "?")}</b>. Vul dat in als adres van de proxy onder <b>Instellingen → Toegang</b>. Anders kan iemand die de container rechtstreeks bereikt zelf bepalen welk adres in het logboek komt.`]);
     }
     if (!rows.length) {
       rows.push(["info", "De verbinding klopt",

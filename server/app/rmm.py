@@ -66,6 +66,19 @@ def _client() -> httpx.Client:
                         headers={"X-API-Key": api_key()})
 
 
+def try_link(url: str, key: str, insecure: bool = False) -> tuple[bool, str]:
+    """Whether an address and key work, before they are saved."""
+    try:
+        with httpx.Client(timeout=15.0, verify=not insecure, headers={"X-API-Key": key}) as client:
+            r = client.get(f"{url.rstrip('/')}/api/v1/orgs")
+        r.raise_for_status()
+    except Exception as exc:
+        explained = _explain(exc)
+        return False, explained.replace(base_url() or "\x00", url)
+    n = len(r.json().get("orgs", []))
+    return True, f"verbonden, {n} {'klant' if n == 1 else 'klanten'}"
+
+
 def handoff_url(return_to: str) -> str:
     """Where to send the browser to have the RMM identify someone."""
     return (f"{public_base_url()}/auth/sso/handoff"

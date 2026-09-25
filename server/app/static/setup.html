@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="nl" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="referrer" content="no-referrer" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <title>LeuffenDoc instellen</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    body { background: var(--bg); }
+    .setup { min-height: 100vh; display: grid; place-items: center; padding: 28px 16px; }
+    .setup .card { width: 100%; max-width: 560px; background: var(--surface); border: 1px solid var(--border);
+                   border-radius: var(--r-lg); padding: 28px; }
+    .setup .mark { display: flex; align-items: center; gap: 11px; font-weight: 700; font-size: 18px;
+                   letter-spacing: -0.02em; margin-bottom: 18px; }
+    .setup .mark .logo { width: 34px; height: 34px; border-radius: var(--r-sm); display: grid; place-items: center;
+                         background: var(--accent-soft); color: var(--accent); }
+    .setup .mark .logo svg { width: 18px; height: 18px; }
+    .setup .mark span { color: var(--text-dim); font-weight: 600; }
+    .setup h1 { font-size: 18px; margin: 0 0 6px; }
+    .setup p.lead { color: var(--text-dim); font-size: 13.5px; line-height: 1.6; margin: 0 0 18px; }
+    .setup .frow { margin-bottom: 14px; }
+    .setup .frow label.l { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 5px; }
+    .setup .inp { width: 100%; }
+    .setup .hint { font-size: 12px; color: var(--text-faint); margin-top: 5px; line-height: 1.5; }
+    .setup .code-inp { font: 600 20px "JetBrains Mono", monospace; letter-spacing: .12em; text-align: center;
+                       text-transform: uppercase; }
+    .setup .btn.wide { width: 100%; justify-content: center; padding: 11px; }
+    .setup .pair-box { border: 1px solid var(--accent-ring, var(--border)); background: var(--surface-2);
+                       border-radius: var(--r-md); padding: 16px; margin: 6px 0 16px; }
+    .setup .pair-box h2 { font-size: 14px; margin: 0 0 4px; }
+    .setup .facts { font-size: 13px; color: var(--text-dim); line-height: 1.6; margin: 0 0 14px; }
+    .setup .facts b { color: var(--text); font-weight: 600; }
+    .setup details { border-top: 1px solid var(--border-soft); padding-top: 12px; margin-top: 6px; }
+    .setup summary { cursor: pointer; font-size: 13px; color: var(--text-dim); margin-bottom: 10px; }
+    .setup .err { color: var(--bad); font-size: 13px; min-height: 18px; margin: 6px 0; line-height: 1.5; }
+    .setup .boolrow { display: flex; gap: 8px; align-items: center; font-size: 13px; }
+    .setup .steps { display: flex; gap: 6px; margin-bottom: 18px; }
+    .setup .steps span { flex: 1; height: 3px; border-radius: 3px; background: var(--surface-3); }
+    .setup .steps span.on { background: var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="setup">
+    <div class="card">
+      <div class="mark"><span class="logo" id="logo"></span> Leuffen <span>Doc</span></div>
+      <div id="body"><div class="muted">Laden…</div></div>
+    </div>
+  </div>
+  <script src="/icons.js"></script>
+  <script src="/setup.js"></script>
+</body>
+</html>

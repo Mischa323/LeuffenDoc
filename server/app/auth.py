@@ -17,16 +17,20 @@ the secret, the cookie, and the dependency that turns a request into a user.
 """
 from __future__ import annotations
 
+import ipaddress
 import os
 import secrets
 
 from fastapi import HTTPException, Request
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-from . import database
+from . import database, settings
 
 COOKIE = "leuffendoc_session"
-SESSION_DAYS = int(os.environ.get("DOC_SESSION_DAYS", "30"))
+
+
+def session_days() -> int:
+    return int(settings.get("DOC_SESSION_DAYS"))
 
 
 def _resolve_secret() -> str:
@@ -60,7 +64,7 @@ def make_cookie(email: str) -> str:
 
 def read_cookie(value: str) -> dict | None:
     try:
-        return serializer().loads(value, max_age=SESSION_DAYS * 86400)
+        return serializer().loads(value, max_age=session_days() * 86400)
     except (BadSignature, SignatureExpired):
         return None
 
@@ -68,13 +72,51 @@ def read_cookie(value: str) -> dict | None:
 def cookie_kwargs() -> dict:
     """Cookie flags. `Secure` is on unless explicitly disabled, which is only
     sensible for local development over plain HTTP."""
-    secure = os.environ.get("DOC_SECURE_COOKIES", "1") not in ("0", "false", "no")
-    return {"httponly": True, "secure": secure, "samesite": "lax",
-            "max_age": SESSION_DAYS * 86400, "path": "/"}
+    return {"httponly": True, "secure": bool(settings.get("DOC_SECURE_COOKIES")), "samesite": "lax",
+            "max_age": session_days() * 86400, "path": "/"}
 
 
 def trust_proxy() -> bool:
-    return os.environ.get("DOC_TRUST_PROXY", "0") == "1"
+    return bool(settings.get("DOC_TRUST_PROXY"))
+
+
+def proxy_ips() -> str:
+    """Where the reverse proxy connects from; empty or "*" means anywhere."""
+    return (settings.get("DOC_PROXY_IPS") or "").strip()
+
+
+def _from_proxy(request: Request) -> bool:
+    """Whether this connection came from the proxy we were told about -- the
+    only case in which its forwarded headers are believed."""
+    if not trust_proxy() or not request.client:
+        return False
+    allowed = proxy_ips()
+    if allowed in ("", "*"):
+        return True
+    try:
+        peer = ipaddress.ip_address(request.client.host)
+    except ValueError:
+        return False
+    for part in allowed.replace(";", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            if peer in ipaddress.ip_network(part, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def request_scheme(request: Request) -> str:
+    """http or https as the visitor used it, which behind a proxy is not what
+    arrives here."""
+    if _from_proxy(request):
+        proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+        if proto in ("http", "https"):
+            return proto
+    return request.url.scheme
 
 
 def client_ip(request: Request) -> str:
@@ -94,7 +136,7 @@ def client_ip(request: Request) -> str:
 
     See `run.py` and the reverse-proxy section of the README.
     """
-    if trust_proxy() and os.environ.get("DOC_PROXY_IPS", "*").strip() in ("", "*"):
+    if _from_proxy(request):
         hops = forwarded_hops(request)
         if hops:
             return hops[-1]
@@ -116,7 +158,9 @@ def bootstrap_admins() -> set[str]:
     way to set up a fresh install and the way back in when nobody is left with
     the rights -- rather than editing the database by hand.
     """
-    raw = os.environ.get("DOC_BOOTSTRAP_ADMIN", "")
+    # Both count: the ones chosen at set-up, and any the container is started
+    # with -- the latter being the way back in if the former were lost.
+    raw = f"{os.environ.get('DOC_BOOTSTRAP_ADMIN', '')},{database.get_setting('DOC_BOOTSTRAP_ADMIN') or ''}"
     return {e.strip().lower() for e in raw.replace(";", ",").split(",") if e.strip()}
 
 

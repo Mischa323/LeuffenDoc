@@ -7,49 +7,13 @@ services:
     #   dockerfile: server/Dockerfile
     ports:
       - "8100:8000"
-    environment:
-      # Where people reach this server -- the https address of your reverse
-      # proxy. Sign-in redirects are built from it, never from the incoming
-      # request, because behind a proxy that arrives as plain HTTP on an
-      # internal name.
-      DOC_PUBLIC_URL: ${DOC_PUBLIC_URL:-http://localhost:8100}
-
-      # TLS is terminated by the proxy, which must pass X-Forwarded-For and
-      # X-Forwarded-Proto. Trusting those headers is what puts the visitor's own
-      # address in the audit log instead of the proxy's.
-      DOC_TRUST_PROXY: ${DOC_TRUST_PROXY:-1}
-      # ...and this is what keeps that trustworthy: forwarded headers are only
-      # believed on connections from your proxy. Left as "*" anyone who can
-      # reach the container directly can put any address in the log. See the
-      # reverse-proxy section of the README -- the proxy must also *overwrite*
-      # X-Forwarded-For rather than append to it.
-      DOC_PROXY_IPS: ${DOC_PROXY_IPS:-*}
-
-      # --- signing in through the RMM ---------------------------------------
-      # The RMM is the identity source: one sign-in, and its 2FA, IP rules and
-      # permissions apply here too. The API key is made in the RMM under
-      # Settings -> API & webhooks.
-      DOC_RMM_URL: ${DOC_RMM_URL:-}
-      DOC_RMM_API_KEY: ${DOC_RMM_API_KEY:-}
-
-      # --- signing in with Microsoft 365 (the fallback path) -----------------
-      DOC_M365_TENANT: ${DOC_M365_TENANT:-}
-      DOC_M365_CLIENT_ID: ${DOC_M365_CLIENT_ID:-}
-      DOC_M365_CLIENT_SECRET: ${DOC_M365_CLIENT_SECRET:-}
-
-      # Always an administrator, whatever the database says: how a fresh
-      # install is set up, and the way back in if nobody is left with the
-      # rights. One or more addresses, comma separated.
-      DOC_BOOTSTRAP_ADMIN: ${DOC_BOOTSTRAP_ADMIN:-}
-
-      # Session cookies. Generated into /data on first boot if left unset.
-      DOC_SESSION_SECRET: ${DOC_SESSION_SECRET:-}
-      # TLS is terminated by your reverse proxy; set to 0 to serve plain HTTP
-      # directly (development only -- cookies then lose the Secure flag).
-      DOC_SECURE_COOKIES: ${DOC_SECURE_COOKIES:-1}
+    # Nothing else is needed: the first visit opens a set-up screen (the code it
+    # asks for is printed in this container's log), and everything is kept in
+    # /data. Environment variables still work and win over saved values -- see
+    # the README -- for pinning a value or getting back in, e.g.:
+    # environment:
+    #   DOC_BOOTSTRAP_ADMIN: "you@example.com"
+    #   DOC_SECRET_KEY: "..."        # keep the vault's key out of the database
     volumes:
-      - leuffendoc-data:/data
+      - ./data:/data
     restart: unless-stopped
-
-volumes:
-  leuffendoc-data:

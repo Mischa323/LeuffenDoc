@@ -25,8 +25,8 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, Redirec
                                Response)
 from fastapi.staticfiles import StaticFiles
 
-from . import (auth, backup, database, docpush, export, m365, rmm, schema, settings, strength,
-               vault)
+from . import (auth, backup, database, docpush, export, m365, pairing, rmm, schema, settings,
+               setup, strength, vault)
 
 log = logging.getLogger("leuffendoc")
 
@@ -112,6 +112,8 @@ async def _note_changes(request: Request, call_next):
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     database.init_db()
+    setup.settle_existing()
+    setup.announce()
     # While this container's own image can still be looked up, note what it
     # set -- an update needs that to carry over only what was chosen here.
     from . import docker_update
@@ -173,17 +175,19 @@ def diagnostics(request: Request, user: dict = Depends(auth.current_user)):
         "version": VERSION,
         "public_url": public_url() or None,
         "trust_proxy": auth.trust_proxy(),
-        "proxy_ips": os.environ.get("DOC_PROXY_IPS", "*"),
+        "proxy_ips": auth.proxy_ips() or "*",
         # Who we think you are, and the raw material that answer came from.
         "client_ip": auth.client_ip(request),
+        # The address the connection itself came from: behind a proxy, the proxy's.
+        "peer": request.client.host if request.client else None,
         "forwarded_for": ", ".join(hops) or None,
         # More than one hop means the proxy appends rather than replaces, and
         # the oldest entry came from the visitor's own browser.
         "forwarded_hops": len(hops),
         "forwarded_proto": request.headers.get("x-forwarded-proto"),
-        "scheme": request.url.scheme,
+        "scheme": auth.request_scheme(request),
         "host": request.headers.get("host"),
-        "secure_cookies": os.environ.get("DOC_SECURE_COOKIES", "1") not in ("0", "false", "no"),
+        "secure_cookies": bool(settings.get("DOC_SECURE_COOKIES")),
     }
 
 
@@ -198,6 +202,8 @@ def dev_login_enabled() -> bool:
 
 @app.get("/auth/login")
 def login_page(request: Request):
+    if setup.needs():
+        return RedirectResponse("/setup", status_code=303)
     if auth.optional_user(request):
         return RedirectResponse("/", status_code=303)
     return _serve_html("login.html")
@@ -1273,14 +1279,11 @@ def ui_config(user: dict = Depends(auth.current_user)):
 
 
 def _environment() -> dict:
-    """The settings that stay in the container's hands, for display only."""
+    """What only the container decides, for display: the development sign-in,
+    and administrators it was started with on top of the chosen ones."""
     return {
-        "DOC_TRUST_PROXY": auth.trust_proxy(),
-        "DOC_PROXY_IPS": os.environ.get("DOC_PROXY_IPS", "*"),
-        "DOC_SECURE_COOKIES": os.environ.get("DOC_SECURE_COOKIES", "1") not in ("0", "false", "no"),
         "DOC_DEV_LOGIN": dev_login_enabled(),
         "DOC_BOOTSTRAP_ADMIN": sorted(auth.bootstrap_admins()),
-        "DOC_SESSION_DAYS": auth.SESSION_DAYS,
     }
 
 
@@ -1308,6 +1311,21 @@ def _check_settings(pending: dict) -> None:
             if not spec.get("min", number) <= number <= spec.get("max", number):
                 raise HTTPException(status_code=400,
                                     detail=f"{key} moet tussen {spec['min']} en {spec['max']} liggen")
+
+    if pending.get("DOC_PROXY_IPS") not in (None, "", "*"):
+        import ipaddress
+        for part in str(pending["DOC_PROXY_IPS"]).replace(";", ",").split(","):
+            if not part.strip():
+                continue
+            try:
+                ipaddress.ip_network(part.strip(), strict=False)
+            except ValueError:
+                raise HTTPException(status_code=400,
+                                    detail=f"{part.strip()} is geen IP-adres of bereik")
+    if pending.get("DOC_BOOTSTRAP_ADMIN"):
+        for part in str(pending["DOC_BOOTSTRAP_ADMIN"]).replace(";", ",").split(","):
+            if part.strip() and "@" not in part:
+                raise HTTPException(status_code=400, detail=f"{part.strip()} is geen e-mailadres")
 
     # The generator as a whole, with what is being saved laid over what is set.
     merged = {k: settings.get(k) for k in settings.SPEC if k.startswith("PW_")}
@@ -1405,6 +1423,166 @@ def update_apply(request: Request, user: dict = Depends(auth.current_user)):
     database.audit("server.update", user_email=user["email"],
                    detail=f"van {VERSION}", ip=auth.client_ip(request))
     return {"version": VERSION, **result}
+
+
+# --------------------------------------------------------------------------- #
+# The first start, and linking with the RMM (see setup.py and pairing.py)
+# --------------------------------------------------------------------------- #
+def _setup_code(body: dict) -> None:
+    if not setup.needs():
+        raise HTTPException(status_code=409, detail="LeuffenDoc is al ingesteld")
+    if not setup.check(body.get("code") or ""):
+        raise HTTPException(status_code=403,
+                            detail="Deze installatiecode klopt niet. Hij staat in de log van de "
+                                   "container; na vijf pogingen wordt er een nieuwe gemaakt.")
+
+
+def _here(request: Request) -> str:
+    """This server's address as the browser used it."""
+    return f"{auth.request_scheme(request)}://{request.headers.get('host', '')}"
+
+
+@app.get("/setup")
+def setup_page():
+    if not setup.needs():
+        return RedirectResponse("/", status_code=303)
+    return _serve_html("setup.html")
+
+
+@app.post("/api/setup/unlock")
+async def setup_unlock(request: Request):
+    _setup_code(await request.json())
+    return setup.detect(request)
+
+
+@app.post("/api/setup/pair")
+async def setup_pair(request: Request):
+    """Set-up with one button: remember the choices, and off to the RMM."""
+    body = await request.json()
+    _setup_code(body)
+    values = {"public_url": body.get("public_url"), "trust_proxy": body.get("trust_proxy"),
+              "proxy_ips": body.get("proxy_ips"), "admins": body.get("admins") or []}
+    try:
+        return {"redirect": pairing.start(body.get("rmm_url"), body.get("public_url") or _here(request),
+                                          "setup", values)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/setup/manual")
+async def setup_manual(request: Request):
+    """Set-up without linking by button: an older RMM, or Microsoft 365 only."""
+    body = await request.json()
+    _setup_code(body)
+    admins = [a for a in (body.get("admins") or []) if a and "@" in a]
+    if not admins:
+        raise HTTPException(status_code=400, detail="Vul minstens één beheerder in")
+    rmm_url = pairing.clean_url(body.get("rmm_url") or "") if body.get("rmm_url") else None
+    key = (body.get("rmm_key") or "").strip()
+    m365_ok = all((body.get(k) or "").strip() for k in ("m365_tenant", "m365_client_id", "m365_secret"))
+    if not (rmm_url and key) and not m365_ok:
+        raise HTTPException(status_code=400, detail="Kies een manier om je aan te melden: de RMM of Microsoft 365")
+    if rmm_url and key:
+        ok, detail = await asyncio.to_thread(rmm.try_link, rmm_url, key, bool(body.get("insecure")))
+        if not ok:
+            raise HTTPException(status_code=400, detail=f"De RMM: {detail}")
+        for name, value in (("DOC_RMM_URL", rmm_url), ("DOC_RMM_API_KEY", key),
+                            ("DOC_RMM_INSECURE_TLS", bool(body.get("insecure")))):
+            if not settings.from_environment(name):
+                settings.put(name, value)
+    if m365_ok:
+        for name, field in (("DOC_M365_TENANT", "m365_tenant"), ("DOC_M365_CLIENT_ID", "m365_client_id"),
+                            ("DOC_M365_CLIENT_SECRET", "m365_secret")):
+            if not settings.from_environment(name):
+                settings.put(name, body[field].strip())
+    setup.apply({"public_url": body.get("public_url") or _here(request),
+                 "trust_proxy": body.get("trust_proxy"), "proxy_ips": body.get("proxy_ips"),
+                 "admins": admins})
+    setup.mark_done()
+    database.audit("setup.done", detail="handmatig ingesteld", ip=auth.client_ip(request))
+    if rmm.configured():
+        asyncio.create_task(asyncio.to_thread(rmm.sync))
+    return {"next": "/auth/login"}
+
+
+@app.post("/api/admin/pair")
+async def admin_pair(request: Request, user: dict = Depends(auth.current_user)):
+    """Link (again) from Instellingen: the same button, for an administrator."""
+    auth.require_admin(user)
+    body = await request.json()
+    try:
+        return {"redirect": pairing.start(body.get("rmm_url"), public_url() or _here(request), "settings")}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/koppelen")
+def pair_page(request: Request, rmm: str = "", state: str = ""):
+    """Where linking comes back to -- and where the RMM's own button lands."""
+    if state:
+        return _serve_html("setup.html")
+    if setup.needs():
+        return RedirectResponse(f"/setup?rmm={urllib.parse.quote(rmm, safe='')}", status_code=303)
+    # Never started by the link alone: a link is something anyone can send an
+    # administrator, and whoever is the RMM decides who may sign in here. The
+    # page shows the address and asks; only pressing the button starts it.
+    return _serve_html("setup.html")
+
+
+@app.get("/koppelen/terug")
+def pair_return(code: str = "", state: str = ""):
+    """Back from the RMM with a code. It is exchanged by the page that follows,
+    which can ask for another address if this server cannot reach the RMM."""
+    pairing.receive_code(state, code)
+    return RedirectResponse(f"/koppelen?state={urllib.parse.quote(state, safe='')}", status_code=303)
+
+
+@app.post("/api/koppelen/afronden")
+async def pair_finish(request: Request):
+    body = await request.json()
+    state = body.get("state") or ""
+    pending = pairing.get(state)
+    if not pending:
+        raise HTTPException(status_code=400, detail="Deze koppeling is verlopen. Begin opnieuw.")
+    user = None
+    if pending["mode"] == "setup":
+        if not setup.needs():
+            raise HTTPException(status_code=409, detail="LeuffenDoc is intussen al ingesteld")
+    else:
+        user = auth.current_user(request)
+        auth.require_admin(user)
+    try:
+        pending, answer = await asyncio.to_thread(pairing.finish, state, body.get("server_url"),
+                                                  body.get("insecure"))
+    except pairing.Unreachable as exc:
+        tried = pairing.get(state) or {}
+        return JSONResponse({"detail": str(exc), "unreachable": True,
+                             "tried": tried.get("server_url")}, status_code=502)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    for name, value in (("DOC_RMM_URL", pending["server_url"]),
+                        ("DOC_RMM_PUBLIC_URL",
+                         pending["rmm_url"] if pending["rmm_url"] != pending["server_url"] else ""),
+                        ("DOC_RMM_INSECURE_TLS", pending["insecure"]),
+                        ("DOC_RMM_API_KEY", answer["api_key"])):
+        if not settings.from_environment(name):
+            settings.put(name, value)
+    if pending["mode"] == "setup":
+        # Whoever approved it in the RMM administers this place.
+        values = dict(pending["extra"])
+        values["admins"] = list(values.get("admins") or []) + [answer.get("approved_by") or ""]
+        setup.apply(values)
+        setup.mark_done()
+        database.audit("setup.done", user_email=answer.get("approved_by"),
+                       detail=f"gekoppeld met {pending['rmm_url']}", ip=auth.client_ip(request))
+        target = "/auth/rmm/start"
+    else:
+        database.audit("rmm.pair", user_email=user["email"], detail=pending["rmm_url"],
+                       ip=auth.client_ip(request))
+        target = "/#/instellingen"
+    asyncio.create_task(asyncio.to_thread(rmm.sync))    # customers and machines straight away
+    return {"next": target, "approved_by": answer.get("approved_by"), "customers": answer.get("orgs")}
 
 
 # --------------------------------------------------------------------------- #
@@ -1656,7 +1834,7 @@ async def create_share(item_id: str, request: Request, field: str = "main",
     # is set; from this request otherwise, which behind a proxy may be wrong.
     base = public_url()
     if not base.startswith("http"):
-        base = str(request.base_url).rstrip("/")
+        base = _here(request)
     return {"url": f"{base}/deel/{token}", "guessed_address": not public_url().startswith("http"),
             "share": _share_out(share)}
 
@@ -1818,6 +1996,8 @@ def vault_judge(request: Request, user: dict = Depends(auth.current_user)):
 # --------------------------------------------------------------------------- #
 @app.get("/")
 def index(request: Request):
+    if setup.needs():
+        return RedirectResponse("/setup", status_code=303)
     if not auth.optional_user(request):
         return RedirectResponse("/auth/login", status_code=303)
     return _serve_html("index.html")

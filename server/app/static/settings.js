@@ -74,9 +74,15 @@ window.DocSettings = function (ctx) {
   }
 
   function rmmBlock() {
+    const current = S("DOC_RMM_PUBLIC_URL").value || S("DOC_RMM_URL").value || "";
     return block("rmm", "Koppeling met de RMM",
       "Aanmelden, klanten en apparaten komen hiervandaan",
-      field("DOC_RMM_URL", "Adres van de RMM", {
+      `<div class="frow"><label>Koppelen met één knop</label>
+         <div class="pair-row"><input class="inp mono" id="pair-url" value="${esc(current)}" placeholder="https://rmm.jouwdomein.nl" />
+           <button class="btn sm" id="pair-go" type="button">${ICON.link} Koppelen</button></div>
+         <div class="hint">De RMM vraagt je om het goed te keuren en regelt de API-sleutel en zijn eigen kant zelf.
+           Alleen nodig om opnieuw te koppelen, of met een andere RMM — de velden hieronder zijn voor handwerk.</div></div>`
+      + field("DOC_RMM_URL", "Adres van de RMM", {
         placeholder: "https://rmm.jouwdomein.nl",
         hint: "Waar deze server de RMM bereikt. Achter dezelfde proxy mag dat een intern adres zijn.",
       })
@@ -352,23 +358,33 @@ window.DocSettings = function (ctx) {
     };
   }
 
-  function environmentBlock() {
+  /* Who gets in, and through what. Set on the first start; changed here.
+     Careful with these: they decide whether this page can still be reached. */
+  function accessBlock() {
     const e = data.environment;
-    const row = (key, value) => `<div class="dt"><span class="mono">${esc(key)}</span></div>
-      <div class="dd">${value}</div>`;
-    const yes = (b) => (b ? "aan" : "uit");
-    return `<div class="panel form-block">
-        <div class="panel-head"><h2>Omgeving</h2>
-          <span class="sub">Alleen in de container te wijzigen: dit bepaalt of je deze pagina überhaupt bereikt</span></div>
-        <div class="deflist">
-          ${row("DOC_TRUST_PROXY", yes(e.DOC_TRUST_PROXY))}
-          ${row("DOC_PROXY_IPS", `<span class="mono">${esc(e.DOC_PROXY_IPS)}</span>`)}
-          ${row("DOC_SECURE_COOKIES", yes(e.DOC_SECURE_COOKIES))}
-          ${row("DOC_BOOTSTRAP_ADMIN", esc(e.DOC_BOOTSTRAP_ADMIN.join(", ") || "—"))}
-          ${row("DOC_SESSION_DAYS", esc(String(e.DOC_SESSION_DAYS)))}
-          ${row("DOC_DEV_LOGIN", e.DOC_DEV_LOGIN
-            ? '<span class="tag warn">aan — alleen voor ontwikkeling</span>' : "uit")}
-        </div></div>`;
+    const dev = e.DOC_DEV_LOGIN
+      ? `<div class="callout warn" style="margin-bottom:12px"><div class="ic">${ICON.alert}</div><div>
+           <div class="cd">Aanmelden zonder wachtwoord (<code>DOC_DEV_LOGIN</code>) staat aan. Alleen voor
+             ontwikkeling — nooit op een server die anderen kunnen bereiken.</div></div></div>` : "";
+    return block("toegang", "Toegang", "De reverse proxy, cookies en wie altijd beheerder is",
+      dev
+      + field("DOC_TRUST_PROXY", "Reverse proxy", {
+        check: "Er zit een reverse proxy voor deze server",
+        hint: "Dan wordt het adres van de bezoeker uit <code>X-Forwarded-For</code> gehaald in plaats van dat van de proxy.",
+      })
+      + field("DOC_PROXY_IPS", "Adres van de proxy", {
+        mono: true, placeholder: "172.20.0.1",
+        hint: "Alleen verbindingen vanaf dit adres (of bereik, met komma's) mogen zeggen wie de bezoeker is. Het <b>Logboek</b> laat zien vanaf welk adres je proxy binnenkomt.",
+      })
+      + field("DOC_SECURE_COOKIES", "Cookies", {
+        check: "Alleen over https versturen",
+        hint: "Uit alleen als LeuffenDoc zonder https wordt gebruikt — anders lukt aanmelden niet meer.",
+      })
+      + field("DOC_BOOTSTRAP_ADMIN", "Altijd beheerder", {
+        placeholder: "naam@bedrijf.nl, …",
+        hint: "Deze adressen zijn beheerder, wat de RMM ook zegt: de weg terug naar binnen als niemand anders het meer is.",
+      })
+      + field("DOC_SESSION_DAYS", "Aangemeld blijven (dagen)"));
   }
 
   // ---- saving a block ----
@@ -531,7 +547,7 @@ window.DocSettings = function (ctx) {
   function paint(host) {
     host.innerHTML = `<div class="settings-grid">
         ${aboutBlock()}${generalBlock()}${rmmBlock()}${m365Block()}
-        ${passwordBlock()}${vaultBlock()}${backupBlock()}${environmentBlock()}
+        ${passwordBlock()}${vaultBlock()}${backupBlock()}${accessBlock()}
       </div>`;
     host.querySelectorAll("[data-save]").forEach((b) => {
       b.onclick = () => save(b.dataset.save, host);
@@ -559,6 +575,17 @@ window.DocSettings = function (ctx) {
     };
     drawUpdate(host);
     wireBackupButtons(host);
+    host.querySelector("#pair-go").onclick = async (ev) => {
+      const button = ev.currentTarget;
+      button.disabled = true;
+      try {
+        const r = await api("/api/admin/pair", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rmm_url: host.querySelector("#pair-url").value.trim() }),
+        });
+        location.href = r.redirect;
+      } catch (e) { toast(e.message); button.disabled = false; }
+    };
     drawBackups(host);
   }
 
