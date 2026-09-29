@@ -265,9 +265,12 @@ PASSWORD = {
     "sub": "Versleuteld bewaard, en gekoppeld aan waar het bij hoort",
     "backref": "Wat hiernaar verwijst",
     # What a list shows at a glance.
-    "columns": ["category", "username", "rotate_at"],
+    "columns": ["category", "device", "username", "rotate_at"],
     "groups": [
         {"key": "wat", "label": "Waarvoor", "fields": [
+            # Any configuration: a reference may name a kind, or a family of them.
+            _f("device", "Hoort bij", "ref", ref="configuratie", icon="box",
+               hint="Het apparaat waar dit wachtwoord bij hoort — een computer, netwerkapparaat of printer."),
             _f("category", "Soort", "select",
                options=["Beheerder", "Gebruiker", "Dienst", "Netwerk", "Overig"]),
             _f("username", "Gebruikersnaam", icon="user"),

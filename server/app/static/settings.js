@@ -153,6 +153,13 @@ window.DocSettings = function (ctx) {
          <div class="hint">Met wat hierboven staat, ook als het nog niet is opgeslagen.</div></div>`);
   }
 
+  // Which blocks make up each section of Instellingen.
+  const SECTIONS = {
+    algemeen: ["algemeen"], rmm: ["rmm"], m365: ["m365"], wachtwoorden: ["wachtwoorden", "kluis"],
+    backup: ["backup"], toegang: ["toegang"], over: ["over"],
+  };
+  let section = "algemeen";
+
   function vaultBlock() {
     const v = data.vault;
     const where = v.from_environment
@@ -162,7 +169,7 @@ window.DocSettings = function (ctx) {
       : `<div class="callout warn"><div class="ic">${ICON.alert}</div><div>
            <div class="ct">De sleutel staat in de database</div>
            <div class="cd">Een back-up van het datavolume bevat dan zowel de kluis als de sleutel. Zet <code>DOC_SECRET_KEY</code> in de omgeving — vóórdat de kluis gevuld wordt, want met een andere sleutel gaan bestaande wachtwoorden niet meer open.</div></div></div>`;
-    return `<div class="panel form-block">
+    return `<div class="panel form-block" id="blk-kluis">
         <div class="panel-head"><h2>Kluis</h2>
           <span class="sub">Niet te wijzigen vanaf deze pagina — een andere sleutel maakt alles onleesbaar</span></div>
         <div class="form-body" style="padding-bottom:16px">${where}</div></div>`;
@@ -573,6 +580,11 @@ window.DocSettings = function (ctx) {
       } catch (e) { out.textContent = e.message; out.className = "test-out bad"; }
       button.disabled = false;
     };
+    // One section at a time, as the sidebar says.
+    const shown = SECTIONS[section] || SECTIONS.algemeen;
+    host.querySelectorAll(".settings-grid > .form-block").forEach((blk) => {
+      blk.classList.toggle("hidden", !shown.includes((blk.id || "").replace(/^blk-/, "")));
+    });
     drawUpdate(host);
     wireBackupButtons(host);
     host.querySelector("#pair-go").onclick = async (ev) => {
@@ -589,7 +601,8 @@ window.DocSettings = function (ctx) {
     drawBackups(host);
   }
 
-  async function view(host) {
+  async function view(host, which) {
+    section = which || "algemeen";
     data = await api("/api/admin/settings");
     paint(host);
   }

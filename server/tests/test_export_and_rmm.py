@@ -40,6 +40,15 @@ def test_an_export_leaves_out_what_is_shut_off(admin, member, org, make):
     assert "Niet voor het lid" not in files["data.json"].decode()
 
 
+def test_a_password_names_the_machine_it_belongs_to(admin, org, make):
+    machine = make(admin, "network", "FW-KANTOOR", {"role": "Firewall"})
+    pw = make(admin, "password", "Beheer firewall kantoor", {"device": machine["id"]},
+              password="Firewall-Beheer-1")
+    assert admin.get(f"/api/items/{pw['id']}").json()["fields"]["device"] == machine["id"]
+    back = admin.get(f"/api/items/{machine['id']}").json()["referred_by"]
+    assert any(r["id"] == pw["id"] and r["field"] == "device" for r in back)
+
+
 def test_the_rmm_gets_what_is_documented_but_never_a_password(admin, org, make):
     machine = database.create_item(org["id"], "computer", "WS-DOCS", {"installed_by": "Iemand",
                                    "notes": "Eerste regel\nTweede regel"}, by=None, source="rmm",

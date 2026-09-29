@@ -142,11 +142,17 @@ window.DocItems = function (ctx) {
         data-type="bool"${value ? " checked" : ""} /> <span>Ja</span></label>`;
     }
     if (field.type === "ref") {
-      const options = (all || []).filter((i) => i.kind === field.ref && !i.archived);
+      // A reference names one kind ("location"), or a family of them
+      // ("configuratie": computers, network gear and printers alike).
+      const family = !KINDS[field.ref];
+      const options = (all || []).filter((i) => !i.archived
+        && (i.kind === field.ref || (KINDS[i.kind] && KINDS[i.kind].family === field.ref)));
+      const what = family ? "configuraties" : KINDS[field.ref].plural.toLowerCase();
       return `<select class="inp" id="${id}" data-key="${field.key}">
         <option value="">—</option>
-        ${options.map((o) => `<option value="${esc(o.id)}"${o.id === value ? " selected" : ""}>${esc(o.name)}</option>`).join("")}
-      </select>${options.length ? "" : `<div class="hint">Nog geen ${esc(KINDS[field.ref].plural.toLowerCase())} bij deze klant.</div>`}`;
+        ${options.map((o) => `<option value="${esc(o.id)}"${o.id === value ? " selected" : ""}>${esc(o.name)}${
+          family && KINDS[o.kind] ? ` — ${esc(KINDS[o.kind].label.toLowerCase())}` : ""}</option>`).join("")}
+      </select>${options.length ? "" : `<div class="hint">Nog geen ${esc(what)} bij deze klant.</div>`}`;
     }
     const type = field.type === "number" ? "number" : field.type === "date" ? "date" : "text";
     return `<input class="inp${field.type === "ip" || field.type === "mac" ? " mono" : ""}"
@@ -186,7 +192,7 @@ window.DocItems = function (ctx) {
     });
   }
 
-  function formHtml(kind, item, all, orgId) {
+  function formHtml(kind, item, all, orgId, prefill) {
     const spec = KINDS[kind];
     return spec.groups.map((group) => `
       <div class="panel form-block">
@@ -195,7 +201,7 @@ window.DocItems = function (ctx) {
           ${group.fields.map((f) => `<div class="frow">
             <label for="f-${f.key}">${f.icon && ICON[f.icon]
               ? `<span class="lb-ic">${ICON[f.icon]}</span>` : ""}${esc(f.label)}</label>
-            ${inputFor(f, item ? valueOf(item, f) : "", all, orgId)}
+            ${inputFor(f, item ? valueOf(item, f) : ((prefill || {})[f.key] || ""), all, orgId)}
             ${f.hint ? `<div class="hint">${esc(f.hint)}</div>` : ""}
           </div>`).join("")}
         </div>
@@ -312,7 +318,7 @@ window.DocItems = function (ctx) {
   /* Adding something is a panel on the page, not a browser dialog: those are
      refused outright in some browsers, and a button that does nothing at all is
      indistinguishable from a broken one. */
-  async function openCreate(org, section, host) {
+  async function openCreate(org, section, host, prefill) {
     await kinds();
     const all = await index(org.id);
     const slot = host.querySelector("#new-item");
@@ -332,7 +338,7 @@ window.DocItems = function (ctx) {
               <input class="inp" id="new-name" placeholder="${esc(section.example)}" /></div>
           </div>
         </div>
-        <div id="new-fields">${formHtml(kind, null, all, org.id)}</div>
+        <div id="new-fields">${formHtml(kind, null, all, org.id, prefill)}</div>
         ${kind === "password" ? `<div class="panel form-block">
             <div class="panel-head"><h2>Wachtwoord</h2></div>
             <div class="form-body"><div class="frow">
@@ -463,7 +469,7 @@ window.DocItems = function (ctx) {
                    : readBlocks()
                      + `<div id="secret"></div><div id="access"></div>`
                      + `<div id="adapters"></div><div id="ports"></div>`
-                     + `<div id="referred"></div>`
+                     + `<div id="passwords"></div><div id="referred"></div>`
                      + `<div id="related"></div><div id="history"></div>`);
       wireHead();
       const goneBtn = host.querySelector("#gone-archive");
@@ -483,6 +489,7 @@ window.DocItems = function (ctx) {
         drawAccess();
         drawAdapters();
         drawPorts();
+        drawPasswords();
         drawReferredBy();
         await drawRelated();
         await drawHistory();
@@ -1149,10 +1156,35 @@ window.DocItems = function (ctx) {
     /* The other half of a reference. A computer names its location; standing
        on the location, what you want is the list of what is there. Grouped by
        the field that points, so it reads as sentences rather than as a dump. */
+    /* The passwords of a machine, where you look for them: on the machine.
+       Those that name it under "Hoort bij" and those linked to it otherwise. */
+    function drawPasswords() {
+      const slot = host.querySelector("#passwords");
+      if (!slot || !KINDS[item.kind] || KINDS[item.kind].family !== "configuratie") return;
+      const seen = new Set();
+      const rows = [...(item.referred_by || []), ...(item.relations || [])]
+        .filter((r) => r.kind === "password" && !seen.has(r.id) && seen.add(r.id));
+      slot.innerHTML = `<div class="panel">
+          <div class="panel-head"><h2>Wachtwoorden</h2>
+            <span class="sub">${rows.length ? (rows.length === 1 ? "1 wachtwoord" : `${rows.length} wachtwoorden`)
+              : "Nog geen wachtwoord bij dit apparaat"}</span>
+            ${mayEdit ? `<button class="btn ghost sm" id="pw-add" style="margin-left:auto">${ICON.plus} Wachtwoord toevoegen</button>` : ""}</div>
+          ${rows.map((r) => `<div class="rel-row" data-goto="${esc(r.id)}">
+              <span class="rel-ic">${ICON.key}</span><span class="rel-name">${esc(r.name)}</span>
+              ${r.archived ? '<span class="tag">afgevoerd</span>' : ""}</div>`).join("")}
+        </div>`;
+      slot.querySelectorAll("[data-goto]").forEach((row) => {
+        row.onclick = () => go(`#/klant/${org.id}/item/${row.dataset.goto}`);
+      });
+      const add = slot.querySelector("#pw-add");
+      if (add) add.onclick = () => go(`#/klant/${org.id}/wachtwoorden?voor=${encodeURIComponent(item.id)}`);
+    }
+
     function drawReferredBy() {
       const slot = host.querySelector("#referred");
       if (!slot) return;
-      const rows = item.referred_by || [];
+      // A password that names this machine is under Wachtwoorden already.
+      const rows = (item.referred_by || []).filter((r) => !(r.kind === "password" && r.field === "device"));
       if (!rows.length) { slot.innerHTML = ""; return; }
       const groups = {};
       for (const r of rows) (groups[r.field_label] ||= []).push(r);

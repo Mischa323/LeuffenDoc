@@ -346,7 +346,42 @@ def logout(request: Request):
 def me(user: dict = Depends(auth.current_user)):
     return {"email": user["email"], "display_name": user.get("display_name"),
             "is_admin": bool(user.get("is_admin")), "source": user.get("source"),
-            "version": VERSION}
+            "version": VERSION,
+            # For the RMM button in the header, the counterpart of its Docs button.
+            "rmm_url": rmm.public_base_url() or None if rmm.configured() else None}
+
+
+@app.get("/api/expiring")
+def expiring_everywhere(user: dict = Depends(auth.current_user)):
+    """The bell: what runs out soon at every customer this person may see --
+    a warranty, a contract, a password to replace. Dates only earn their keep
+    if they come and find you."""
+    import datetime
+    today = datetime.date.today()
+    warn = int(settings.get("EXPIRY_WARN_DAYS"))
+    hidden = _hidden(user)
+    orgs = database.list_orgs() if user.get("is_admin") else database.user_orgs(user["email"])
+    out = []
+    for org in orgs:
+        for item in database.list_items(org["id"]):
+            if item["id"] in hidden:
+                continue
+            for field in schema.fields_of(item["kind"]).values():
+                if not field.get("expiry") or field["type"] != "date":
+                    continue
+                value = item["fields"].get(field["key"])
+                if not value:
+                    continue
+                try:
+                    days = (datetime.date.fromisoformat(str(value)[:10]) - today).days
+                except ValueError:
+                    continue
+                if days <= warn:
+                    out.append({"org_id": org["id"], "org_name": org["name"], "item_id": item["id"],
+                                "item_name": item["name"], "kind": item["kind"],
+                                "field": field["label"], "on": str(value)[:10], "days": days})
+    out.sort(key=lambda e: e["days"])
+    return {"count": len(out), "items": out[:40]}
 
 
 @app.get("/api/orgs")

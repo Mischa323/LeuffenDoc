@@ -24,12 +24,29 @@
     { id: "kluis", label: "Kluis", icon: "key", title: "Kluis",
       sub: "Wachtwoorden bij alle klanten: wat vervangen moet, wat zwak is, wat dubbel staat",
       admin: true },
+  ];
+
+  // Instellingen, as in the RMM: behind the gear at the top right, with a list
+  // of its own in the sidebar. The document types and the log live here too.
+  const SETTINGS = [
+    { id: "algemeen", label: "Algemeen", icon: "gear", title: "Algemeen",
+      sub: "Het adres van deze server, en wanneer een datum waarschuwt" },
+    { id: "rmm", label: "RMM", icon: "shield", title: "Koppeling met de RMM",
+      sub: "Aanmelden, klanten en apparaten komen hiervandaan" },
+    { id: "m365", label: "Microsoft 365", icon: "user", title: "Microsoft 365",
+      sub: "De tweede weg naar binnen" },
+    { id: "wachtwoorden", label: "Wachtwoorden", icon: "key", title: "Wachtwoorden",
+      sub: "Hoe ze gemaakt worden, en de sleutel van de kluis" },
+    { id: "backup", label: "Back-ups", icon: "download", title: "Back-ups",
+      sub: "Momentopnamen, en een versleutelde kopie om mee te nemen" },
+    { id: "toegang", label: "Toegang", icon: "lock", title: "Toegang",
+      sub: "De reverse proxy, cookies en wie altijd beheerder is" },
     { id: "types", label: "Documenttypes", icon: "layers", title: "Documenttypes",
-      sub: "Zelf samengestelde types, voor al je klanten", admin: true },
+      sub: "Zelf samengestelde types, voor al je klanten" },
     { id: "logboek", label: "Logboek", icon: "history", title: "Logboek",
-      sub: "Wie heeft wat bekeken en gewijzigd", admin: true },
-    { id: "instellingen", label: "Instellingen", icon: "gear", title: "Instellingen",
-      sub: "Wat je kunt wijzigen zonder de container aan te raken", admin: true },
+      sub: "Wie heeft wat bekeken en gewijzigd" },
+    { id: "over", label: "Over deze server", icon: "server", title: "Over deze server",
+      sub: "Versie en bijwerken" },
   ];
 
   // Inside a customer. `kinds` names what a section lists; a section without it
@@ -163,6 +180,16 @@
       render();
       return;
     }
+    // Instellingen and its sections; the old addresses of two of them still work.
+    if (["instellingen", "types", "logboek"].includes(parts[0])) {
+      state.org = null;
+      state.item = null;
+      state.tab = "instellingen";
+      const wanted = parts[0] === "instellingen" ? parts[1] : parts[0];
+      state.section = SETTINGS.some((s) => s.id === wanted) ? wanted : "algemeen";
+      render();
+      return;
+    }
     if (parts[0] === "klant" && parts[1]) {
       state.org = state.orgs.find((o) => o.id === parts[1]) || null;
       // `.../item/<id>` opens one thing; everything else is a section.
@@ -212,11 +239,99 @@
   }
 
   function crumbs() {
-    $("crumb-home").className = state.org ? "" : "here";
+    const inSettings = state.tab === "instellingen";
+    $("crumb-home").className = state.org || inSettings ? "" : "here";
     $("crumb-home").onclick = () => go("#/klanten");
-    $("crumb-sep").classList.toggle("hidden", !state.org);
-    $("crumb-org").classList.toggle("hidden", !state.org);
+    $("crumb-sep").classList.toggle("hidden", !state.org && !inSettings);
+    $("crumb-org").classList.toggle("hidden", !state.org && !inSettings);
     if (state.org) $("crumb-org").textContent = state.org.name;
+    else if (inSettings) $("crumb-org").textContent = "Instellingen";
+    $("settings-btn").classList.toggle("active", inSettings);
+  }
+
+  // ---- Instellingen ----
+  async function settingsView() {
+    if (!state.me.is_admin) { go("#/klanten"); return; }
+    const sec = SETTINGS.find((s) => s.id === state.section) || SETTINGS[0];
+    $("page-title").textContent = sec.title;
+    $("page-sub").textContent = sec.sub;
+    crumbs();
+    $("nav-label").textContent = "Instellingen";
+    $("nav").innerHTML = SETTINGS.map((s) =>
+      `<button data-sec="${s.id}"${s.id === sec.id ? ' class="active"' : ""}>${ICON[s.icon] || ""} ${esc(s.label)}</button>`).join("")
+      + `<button data-back="1" style="margin-top:10px"><span class="back-ico">${ICON.chevR}</span> Alle klanten</button>`;
+    $("nav").querySelectorAll("button").forEach((b) => {
+      b.onclick = () => go(b.dataset.back ? "#/klanten" : `#/instellingen/${b.dataset.sec}`);
+    });
+    $("page-actions").innerHTML = "";
+    if (sec.id === "logboek") { $("view").innerHTML = await auditView(); return; }
+    if (sec.id === "types") {
+      $("page-actions").innerHTML =
+        `<button class="btn sm" id="new-type">${ICON.plus} Type toevoegen</button>`;
+      await Types.view($("view"));
+      $("new-type").onclick = () => { Types.start(); render(); };
+      return;
+    }
+    await Settings.view($("view"), sec.id);
+  }
+
+  // ---- the header: what runs out, the RMM, help, and the account menu ----
+  // The dot says whether anything runs out; the list is only built while the
+  // menu is open, so a closed menu leaves nothing hidden in the page.
+  async function drawBell(open) {
+    let data = { count: 0, items: [] };
+    try { data = await api("/api/expiring"); } catch (e) { return; }
+    $("bell-ping").classList.toggle("hidden", !data.count);
+    $("bell-btn").title = data.count ? `${data.count} ${data.count === 1 ? "ding loopt" : "dingen lopen"} af` : "Wat afloopt";
+    if (!open) return;
+    const when = (d) => d < 0 ? "verlopen" : d === 0 ? "vandaag" : `over ${d} ${d === 1 ? "dag" : "dagen"}`;
+    $("bell-menu").innerHTML = data.count
+      ? `<div class="bm-head">Loopt af${data.count > data.items.length ? ` — de eerste ${data.items.length} van ${data.count}` : ""}</div>`
+        + data.items.map((e) => `<a data-org="${esc(e.org_id)}" data-item="${esc(e.item_id)}">
+            <span class="bm-text">${esc(e.item_name)}<small>${esc(e.org_name)} · ${esc(e.field.toLowerCase())}</small></span>
+            <span class="tag ${e.days < 0 ? "bad" : "warn"}">${esc(when(e.days))}</span></a>`).join("")
+      : `<div class="bm-none">Er loopt niets af de komende tijd.</div>`;
+    $("bell-menu").querySelectorAll("a[data-item]").forEach((a) => {
+      a.onclick = () => {
+        $("bell-menu").classList.remove("open");
+        $("bell-menu").innerHTML = "";
+        go(`#/klant/${a.dataset.org}/item/${a.dataset.item}`);
+      };
+    });
+  }
+
+  function wireHeader() {
+    $("bell-ico").innerHTML = ICON.bell;
+    $("help-ico").innerHTML = ICON.info;
+    $("debug-ico").innerHTML = ICON.alert;
+    $("gear-ico").innerHTML = ICON.gear;
+    $("rmm-ico").innerHTML = ICON.shield;
+    $("debug-btn").href = "https://github.com/Mischa323/LeuffenDoc/issues/new?body="
+      + encodeURIComponent(`Versie: ${state.me.version}\nBrowser: ${navigator.userAgent}\n\nWat gebeurde er, en wat verwachtte je?\n`);
+    if (state.me.rmm_url) {
+      $("rmm-btn").href = state.me.rmm_url;
+      $("rmm-btn").classList.remove("hidden");
+    }
+    $("settings-btn").classList.toggle("hidden", !state.me.is_admin);
+    $("usermenu").innerHTML = (state.me.is_admin
+      ? `<a href="#/instellingen">${ICON.gear} Instellingen</a><div class="hmenu-sep"></div>` : "")
+      + `<a href="/auth/logout">${ICON.logout} Afmelden</a>`;
+    const menus = [["userchip", "usermenu"], ["bell-btn", "bell-menu"]];
+    for (const [button, menu] of menus) {
+      $(button).onclick = (ev) => {
+        ev.stopPropagation();
+        const open = !$(menu).classList.contains("open");
+        menus.forEach(([, m]) => $(m).classList.remove("open"));
+        $(menu).classList.toggle("open", open);
+        if (menu === "bell-menu") { if (open) drawBell(true); else $("bell-menu").innerHTML = ""; }
+      };
+    }
+    $("usermenu").onclick = () => $("usermenu").classList.remove("open");
+    document.addEventListener("click", () => {
+      menus.forEach(([, m]) => $(m).classList.remove("open"));
+      $("bell-menu").innerHTML = "";
+    });
+    drawBell(false);
   }
 
   // ---- views ----
@@ -420,6 +535,7 @@
   // ---- render ----
   async function render() {
     if (state.tab === "zoeken") { await searchView(); return; }
+    if (state.tab === "instellingen") { await settingsView(); return; }
     const tab = tabsHere().find((t) => t.id === state.tab) || tabsHere()[0];
     state.tab = tab.id;
     $("page-title").textContent = state.org && tab.id === "overzicht" ? state.org.name : tab.title;
@@ -461,6 +577,12 @@
           ? `<button class="btn sm" id="add-item">${ICON.plus} Toevoegen</button>` : "";
         await Items.listView($("view"), state.org, tab);
         if (mayEdit) $("add-item").onclick = () => Items.openCreate(state.org, tab, $("view"));
+        // From a machine's page: "Wachtwoord toevoegen" arrives here with the
+        // machine already chosen under "Hoort bij".
+        const voor = new URLSearchParams(location.hash.split("?")[1] || "").get("voor");
+        if (mayEdit && voor && tab.id === "wachtwoorden") {
+          await Items.openCreate(state.org, tab, $("view"), { device: voor });
+        }
         if (tab.id === "wachtwoorden" && state.me.is_admin) await showVaultKey();
         return;
       }
@@ -485,16 +607,7 @@
     $("page-actions").innerHTML = (tab.id === "klanten" && state.me.is_admin)
       ? `<button class="btn sm" id="add-org">${ICON.plus} Klant toevoegen</button>` : "";
 
-    if (tab.id === "logboek") { $("view").innerHTML = await auditView(); return; }
-    if (tab.id === "instellingen") { await Settings.view($("view")); return; }
     if (tab.id === "kluis") { await Vault.view($("view")); return; }
-    if (tab.id === "types") {
-      $("page-actions").innerHTML =
-        `<button class="btn sm" id="new-type">${ICON.plus} Type toevoegen</button>`;
-      await Types.view($("view"));
-      $("new-type").onclick = () => { Types.start(); render(); };
-      return;
-    }
 
     $("view").innerHTML = orgsView();
     $("view").querySelectorAll(".orgcard[data-org]").forEach((card) => {
@@ -693,7 +806,7 @@
     $("user-email").textContent = state.me.email;
     $("avatar").textContent = name.slice(0, 2).toUpperCase();
     $("avatar").style.background = "var(--accent)";
-    $("logout-btn").innerHTML = ICON.logout;
+    wireHeader();
     window.addEventListener("hashchange", route);
     route();
   })();
