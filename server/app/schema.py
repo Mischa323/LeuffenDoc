@@ -57,7 +57,7 @@ COMPUTER = {
     "columns": ["role", "status", "os", "installed_at", "eol"],
     "groups": [
         {"key": "wat", "label": "Wat het is", "fields": [
-            _f("role", "Soort", "select", options=["Werkplek", "Laptop", "Server",
+            _f("role", "Soort", "select", options=["Desktop", "Laptop", "Server",
                                                    "Virtuele machine", "NAS", "Tablet"]),
             _f("status", "Status", "select", options=STATUS),
             _f("purpose", "Waar het voor dient", "textarea",
@@ -99,7 +99,7 @@ NETWORK = {
     "groups": [
         {"key": "wat", "label": "Wat het is", "fields": [
             _f("role", "Soort", "select",
-               options=["Switch", "Firewall", "Router", "Access point", "Modem"]),
+               options=["Router", "Switch", "Firewall", "Wifi-punt", "Modem"]),
             _f("status", "Status", "select", options=STATUS),
             _f("ports", "Aantal poorten", "number", icon="network",
                hint="Alleen bij een switch. Hiermee wordt de poortenlijst opgebouwd."),
@@ -126,14 +126,16 @@ NETWORK = {
 PRINTER = {
     "label": "Printer",
     "plural": "Printers",
-    "icon": "copy",
+    "icon": "printer",
     "family": "configuratie",
     "sub": "Printers en multifunctionals",
     "backref": "Wat hiernaar verwijst",
     # What a list shows at a glance.
-    "columns": ["status", "placement", "eol"],
+    "columns": ["role", "status", "placement", "eol"],
     "groups": [
         {"key": "wat", "label": "Wat het is", "fields": [
+            _f("role", "Soort", "select",
+               options=["Printer", "Multifunctional", "Labelprinter", "Plotter"]),
             _f("status", "Status", "select", options=STATUS),
             _f("location", "Locatie", "ref", ref="location"),
             _f("placement", "Waar hij staat", hint="De ruimte of verdieping."),
@@ -320,6 +322,31 @@ DOCUMENT = {
 # Everything above is built in. Types people define themselves live in the
 # database and join these at run time -- same shape, same rendering, so nothing
 # downstream can tell the difference.
+# --------------------------------------------------------------------------- #
+# Configuration types
+#
+# Desktops and laptops, routers, switches and wifi points: what an MSP looks
+# for. The kind stays computer, network or printer -- links, switch ports and
+# the RMM hang on that -- and its "Soort" is the type, with a plural and an
+# icon so it can have its own place in the sidebar and the lists.
+# --------------------------------------------------------------------------- #
+SUBTYPES = {
+    "computer": [("Desktop", "Desktops", "desktop"), ("Laptop", "Laptops", "laptop"),
+                 ("Server", "Servers", "server"), ("Virtuele machine", "Virtuele machines", "layers"),
+                 ("NAS", "NAS'en", "disk"), ("Tablet", "Tablets", "tablet")],
+    "network": [("Router", "Routers", "router"), ("Switch", "Switches", "network"),
+                ("Firewall", "Firewalls", "shield"), ("Wifi-punt", "Wifi-punten", "wifi"),
+                ("Modem", "Modems", "globe")],
+    "printer": [("Printer", "Printers", "printer"), ("Multifunctional", "Multifunctionals", "printer"),
+                ("Labelprinter", "Labelprinters", "printer"), ("Plotter", "Plotters", "printer")],
+}
+# (Older names -- Werkplek, Access point -- are renamed at start-up; see database._migrate.)
+
+for _kind, _spec in (("computer", COMPUTER), ("network", NETWORK), ("printer", PRINTER)):
+    _spec["subtypes"] = [{"id": re.sub(r"[^a-z0-9]+", "-", role.lower()).strip("-"), "role": role,
+                          "label": role, "plural": plural, "icon": icon}
+                         for role, plural, icon in SUBTYPES[_kind]]
+
 BUILT_IN: dict[str, dict] = {
     "computer": COMPUTER,
     "network": NETWORK,

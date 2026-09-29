@@ -2,6 +2,10 @@
 const I = (p, o = {}) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${o.w || 2}" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
 
 const ICON = {
+  laptop: I('<rect x="4" y="4.5" width="16" height="11" rx="1.5"/><path d="M2 19.5h20"/>'),
+  tablet: I('<rect x="5" y="2.5" width="14" height="19" rx="2"/><path d="M11 18.5h2"/>'),
+  printer: I('<path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M7 14h10v7H7z"/>'),
+  router: I('<rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 16.5h.01M11 16.5h.01"/><path d="M15 13V9"/><path d="M12.5 7a3.5 3.5 0 0 1 5 0"/><path d="M10.5 4.5a6.5 6.5 0 0 1 9 0"/>'),
   shield: I('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>'),
   search: I('<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>'),
   bell: I('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>'),

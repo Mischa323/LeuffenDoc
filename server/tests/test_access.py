@@ -62,3 +62,17 @@ def test_a_sync_that_finds_nothing_new_changes_nothing(admin, org):
     assert database.get_item(item["id"])["updated_at"] == before
     database.update_item(item["id"], rmm={"cpu": "Y"}, rmm_keys=["cpu"], source="rmm")
     assert database.get_item(item["id"])["updated_at"] > before
+
+
+def test_old_type_names_are_renamed_and_types_are_counted(admin, org, make):
+    old = database.create_item(org["id"], "computer", "OUD-STATION", {"role": "Werkplek"}, by=None)
+    ap = database.create_item(org["id"], "network", "OUD-AP", {"role": "Access point"}, by=None)
+    conn = database.get_conn()
+    database._migrate(conn)
+    conn.commit()
+    assert database.get_item(old["id"])["fields"]["role"] == "Desktop"
+    assert database.get_item(ap["id"])["fields"]["role"] == "Wifi-punt"
+    make(admin, "network", "SW-TELLER", {"role": "Switch"})
+    roles = admin.get(f"/api/orgs/{org['id']}/summary").json()["roles"]
+    assert roles["computer"]["Desktop"] >= 1 and roles["network"]["Switch"] >= 1
+    assert roles["network"]["Wifi-punt"] >= 1

@@ -578,10 +578,15 @@ def org_summary(org_id: str, user: dict = Depends(auth.current_user)):
     # shut off to them would still say it is there.
     hidden = _hidden(user)
     counts: dict = {}
+    roles: dict = {}          # per kind, per configuration type
     for item in database.list_items(org_id):
         if item["id"] not in hidden:
             counts[item["kind"]] = counts.get(item["kind"], 0) + 1
-    return {"org": org, "counts": counts}
+            role = item["fields"].get("role")
+            if role and item["kind"] in schema.SUBTYPES:
+                per = roles.setdefault(item["kind"], {})
+                per[role] = per.get(role, 0) + 1
+    return {"org": org, "counts": counts, "roles": roles}
 
 
 @app.post("/api/orgs/{org_id}/items")

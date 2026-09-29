@@ -244,6 +244,18 @@ window.DocItems = function (ctx) {
     return wanted.map((k) => byKey[k]).filter(Boolean);
   }
 
+  // The configuration types of some kinds, each knowing its kind.
+  function subtypesOf(kinds) {
+    return (kinds || []).flatMap((k) => ((KINDS[k] || {}).subtypes || []).map((s) => ({ ...s, kind: k })));
+  }
+
+  // What something is, as a list says it: its type where it has one.
+  function typeCell(item) {
+    const s = subtypesOf([item.kind]).find((t) => t.role === (item.fields || {}).role);
+    return s ? `${ICON[s.icon] || ICON[KINDS[item.kind].icon]} ${esc(s.label)}`
+             : `${ICON[KINDS[item.kind].icon]} ${esc(KINDS[item.kind].label)}`;
+  }
+
   async function listView(host, org, section) {
     await kinds();
     const all = await index(org.id, true);
@@ -252,10 +264,31 @@ window.DocItems = function (ctx) {
     let kind = allowed.includes(params.get("soort")) ? params.get("soort") : null;
     let showArchived = params.get("oud") === "1";
 
-    const items = all.filter((i) => allowed.includes(i.kind)
-      && (!kind || i.kind === kind) && (showArchived || !i.archived));
+    // Configuration types -- Desktops, Laptops, Routers, Wifi-punten -- where
+    // the kinds in this section have them. "geen" is what has no type yet.
+    const subs = subtypesOf(allowed);
+    const typeId = params.get("type");
+    const sub = subs.find((s) => s.id === typeId) || null;
+    const roleOf = (i) => (i.fields || {}).role;
+    const typed = (i) => subs.some((s) => s.kind === i.kind && s.role === roleOf(i));
+    const inType = (i) => (sub ? i.kind === sub.kind && roleOf(i) === sub.role
+                               : typeId === "geen" ? !typed(i) : true);
 
-    const chips = allowed.length > 1 ? `<div class="chips">
+    const items = all.filter((i) => allowed.includes(i.kind)
+      && (!kind || i.kind === kind) && inType(i) && (showArchived || !i.archived));
+
+    const live = all.filter((i) => allowed.includes(i.kind) && !i.archived);
+    const untyped = live.filter((i) => !typed(i)).length;
+    const chips = subs.length ? `<div class="chips">
+      <button class="chip${sub || typeId === "geen" ? "" : " on"}" data-type="">Alles
+        <span class="n">${live.length}</span></button>
+      ${subs.map((s) => [s, live.filter((i) => i.kind === s.kind && roleOf(i) === s.role).length])
+        .filter(([, n]) => n)
+        .map(([s, n]) => `<button class="chip${sub && sub.id === s.id ? " on" : ""}" data-type="${s.id}">
+          ${ICON[s.icon] || ""} ${esc(s.plural)} <span class="n">${n}</span></button>`).join("")}
+      ${untyped ? `<button class="chip${typeId === "geen" ? " on" : ""}" data-type="geen">Zonder soort
+        <span class="n">${untyped}</span></button>` : ""}
+    </div>` : allowed.length > 1 ? `<div class="chips">
       <button class="chip${kind ? "" : " on"}" data-kind="">Alles
         <span class="n">${all.filter((i) => allowed.includes(i.kind) && !i.archived).length}</span></button>
       ${allowed.map((k) => `<button class="chip${kind === k ? " on" : ""}" data-kind="${k}">
@@ -270,9 +303,12 @@ window.DocItems = function (ctx) {
     // Columns come from the kind. A mixed list can only show what every kind
     // in it has, which for equipment is the status -- better than a bare list
     // of names, and never a column that is empty for half the rows.
-    const cols = kind ? columnsOf(kind) : [];
-    const shared = kind ? [] : (KINDS[allowed[0]].columns || [])
-      .filter((k) => allowed.every((a) => (KINDS[a].columns || []).includes(k)));
+    const one = kind || (sub && sub.kind) || null;
+    // In a type's own list its type goes without saying.
+    const cols = one ? columnsOf(one).filter((c) => !(sub && c.key === "role")) : [];
+    // In a mixed list the Soort column says the type, so "role" is not repeated.
+    const shared = one ? [] : (KINDS[allowed[0]].columns || [])
+      .filter((k) => k !== "role" && allowed.every((a) => (KINDS[a].columns || []).includes(k)));
     const sharedLabels = shared.map((k) =>
       (columnsOf(allowed[0]).find((c) => c.key === k) || {}).label || k);
     const sharedCell = (item, key) => {
@@ -280,7 +316,7 @@ window.DocItems = function (ctx) {
       return field ? cell(item, field, all) : "";
     };
     const table = items.length ? `<div class="panel"><table class="grid"><thead><tr>
-        <th>Naam</th>${kind ? "" : "<th>Soort</th>"}
+        <th>Naam</th>${one ? "" : "<th>Soort</th>"}
         ${cols.map((c) => `<th>${esc(c.label)}</th>`).join("")}
         ${sharedLabels.map((l) => `<th>${esc(l)}</th>`).join("")}
         <th></th></tr></thead><tbody>
@@ -288,7 +324,7 @@ window.DocItems = function (ctx) {
           <td><b>${esc(i.name)}</b>${i.archived ? ' <span class="tag">afgevoerd</span>' : ""}
             ${i.restricted ? ` <span class="tag warn" title="Alleen voor genoemde collega's">${ICON.lock}</span>` : ""}
             ${i.rmm_gone ? ' <span class="tag warn">niet meer in de RMM</span>' : ""}</td>
-          ${kind ? "" : `<td><span class="kind-cell">${ICON[KINDS[i.kind].icon]} ${esc(KINDS[i.kind].label)}</span></td>`}
+          ${one ? "" : `<td><span class="kind-cell">${typeCell(i)}</span></td>`}
           ${cols.map((c) => `<td>${cell(i, c, all) || "—"}</td>`).join("")}
           ${shared.map((k) => `<td>${sharedCell(i, k) || "—"}</td>`).join("")}
           <td class="right">${i.source === "rmm" ? '<span class="tag">RMM</span>' : ""}</td>
@@ -303,16 +339,22 @@ window.DocItems = function (ctx) {
 
     host.querySelectorAll(".chip").forEach((b) => {
       b.onclick = () => {
+        if (b.dataset.type !== undefined) {
+          go(`#/klant/${org.id}/${section.id}${b.dataset.type ? `?type=${b.dataset.type}` : ""}`);
+          return;
+        }
         const next = b.dataset.kind;
         go(`#/klant/${org.id}/${section.id}${next ? `?soort=${next}` : ""}`);
       };
     });
     const old = host.querySelector("#toggle-old");
     if (old) old.onclick = () => go(`#/klant/${org.id}/${section.id}?${new URLSearchParams(
-      { ...(kind ? { soort: kind } : {}), ...(showArchived ? {} : { oud: "1" }) })}`);
+      { ...(kind ? { soort: kind } : {}), ...(typeId ? { type: typeId } : {}),
+        ...(showArchived ? {} : { oud: "1" }) })}`);
     host.querySelectorAll("tr[data-item]").forEach((tr) => {
       tr.onclick = () => go(`#/klant/${org.id}/item/${tr.dataset.item}`);
     });
+    return sub;
   }
 
   /* Adding something is a panel on the page, not a browser dialog: those are
@@ -325,7 +367,8 @@ window.DocItems = function (ctx) {
     if (!slot) return;
     if (slot.dataset.open === "1") { slot.dataset.open = "0"; slot.innerHTML = ""; return; }
     slot.dataset.open = "1";
-    let kind = section.kinds[0];
+    // Adding from a type's list starts on that type's kind.
+    let kind = prefill && section.kinds.includes(prefill.__kind) ? prefill.__kind : section.kinds[0];
 
     const draw = () => {
       slot.innerHTML = `<div class="panel new-head">
@@ -1333,5 +1376,6 @@ window.DocItems = function (ctx) {
     try { return (await api(`/api/items/${itemId}`)).name; } catch (e) { return null; }
   }
 
-  return { kinds, index, forget, listView, detailView, openCreate, expiring, itemName, setConfig };
+  return { kinds, index, forget, listView, detailView, openCreate, expiring, itemName, setConfig,
+           subtypesOf };
 };

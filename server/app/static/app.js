@@ -227,14 +227,43 @@
     $("nav-label").textContent = state.org ? "Deze klant" : "Overzicht";
     $("nav").innerHTML = tabsHere().map((t) =>
       `<button data-tab="${t.id}"${t.id === state.tab ? ' class="active"' : ""}>
-         ${ICON[t.icon]} ${t.label}${t.id === "klanten" ? `<span class="count">${state.orgs.length}</span>` : ""}
-       </button>`).join("")
+         ${ICON[t.icon]} ${t.label}${t.id === "klanten" ? `<span class="count">${state.orgs.length}</span>`
+           : state.org && t.kinds ? `<span class="count" data-count="${t.id}"></span>` : ""}
+       </button>${state.org && Items.subtypesOf(t.kinds).length ? `<div class="nav-subs" data-subs="${t.id}"></div>` : ""}`).join("")
       + (state.org ? `<button data-back="1" style="margin-top:10px">
            <span class="back-ico">${ICON.chevR}</span> Alle klanten</button>` : "");
     $("nav").querySelectorAll("button").forEach((b) => {
       b.onclick = () => go(b.dataset.back ? "#/klanten"
                                           : (state.org ? `#/klant/${state.org.id}/${b.dataset.tab}`
                                                        : `#/${b.dataset.tab}`));
+    });
+    if (state.org) fillCounts(state.org.id);
+  }
+
+  // How many of each there are at this customer, next to the section. Fetched
+  // each time the sidebar is drawn, so something just added is counted; only
+  // what this person may see, and nothing taken out of use.
+  async function fillCounts(orgId) {
+    let summary;
+    try { summary = await api(`/api/orgs/${orgId}/summary`); } catch (e) { return; }
+    if (!state.org || state.org.id !== orgId) return;
+    const counts = summary.counts || {};
+    $("nav").querySelectorAll("[data-count]").forEach((el) => {
+      const tab = ORG.find((t) => t.id === el.dataset.count);
+      el.textContent = (tab && tab.kinds || []).reduce((n, k) => n + (counts[k] || 0), 0);
+    });
+    // Under a section with configuration types: the types this customer has.
+    const roles = summary.roles || {};
+    const here = new URLSearchParams(location.hash.split("?")[1] || "").get("type");
+    $("nav").querySelectorAll("[data-subs]").forEach((slot) => {
+      const tab = ORG.find((t) => t.id === slot.dataset.subs);
+      slot.innerHTML = Items.subtypesOf(tab.kinds)
+        .map((s) => [s, (roles[s.kind] || {})[s.role] || 0]).filter(([, n]) => n)
+        .map(([s, n]) => `<button class="nav-sub${state.tab === tab.id && here === s.id ? " active" : ""}"
+            data-type="${s.id}">${ICON[s.icon] || ""} ${esc(s.plural)}<span class="count">${n}</span></button>`).join("");
+      slot.querySelectorAll("button").forEach((b) => {
+        b.onclick = () => go(`#/klant/${orgId}/${tab.id}?type=${b.dataset.type}`);
+      });
     });
   }
 
@@ -575,8 +604,14 @@
         const mayEdit = !state.org.may || state.org.may.edit;
         $("page-actions").innerHTML = mayEdit
           ? `<button class="btn sm" id="add-item">${ICON.plus} Toevoegen</button>` : "";
-        await Items.listView($("view"), state.org, tab);
-        if (mayEdit) $("add-item").onclick = () => Items.openCreate(state.org, tab, $("view"));
+        const sub = await Items.listView($("view"), state.org, tab);
+        if (sub) {
+          // A type's own list: "Desktops", with Configuraties above it.
+          $("page-title").textContent = sub.plural;
+          $("page-sub").textContent = tab.title;
+        }
+        if (mayEdit) $("add-item").onclick = () => Items.openCreate(state.org, tab, $("view"),
+          sub ? { __kind: sub.kind, role: sub.role } : undefined);
         // From a machine's page: "Wachtwoord toevoegen" arrives here with the
         // machine already chosen under "Hoort bij".
         const voor = new URLSearchParams(location.hash.split("?")[1] || "").get("voor");
@@ -711,6 +746,10 @@
     return `${Math.round(m / 60)} uur geleden`;
   }
 
+  /* The link with the RMM says nothing while it works -- a notice that is
+     always there is one nobody reads. It speaks up when the last sync is more
+     than an hour ago, when the RMM does not answer, or when documentation
+     cannot be sent. Syncing by hand lives under Instellingen -> RMM. */
   async function showRmmLink() {
     const host = $("rmm-status");
     if (!host) return;
@@ -720,21 +759,25 @@
       host.innerHTML = `<div class="callout info" style="margin-bottom:16px">
         <div class="ic">${ICON.info}</div><div>
         <div class="ct">Niet gekoppeld aan de RMM</div>
-        <div class="cd">Met <code>DOC_RMM_URL</code> en <code>DOC_RMM_API_KEY</code> melden mensen zich aan met hun RMM-account, en komen klanten en toegang vanzelf mee.</div></div></div>`;
+        <div class="cd">Koppel onder <b>Instellingen → RMM</b>: dan melden mensen zich aan met hun RMM-account,
+          en komen klanten, toegang en apparaten vanzelf mee.</div></div></div>`;
       return;
     }
-    const when = s.at ? ago(Date.now() / 1000 - s.at) : "nog niet";
-    const bad = s.ok === false;
-    // What the RMM shows under Docs in its device drawer is sent from here.
+    const age = s.at ? Date.now() / 1000 - s.at : Infinity;
     const docs = s.docs || {};
-    const docsLine = docs.ok === false
-      ? `<div style="margin-top:6px;color:var(--warn)">Documentatie naar de RMM sturen lukt niet: ${esc(docs.detail)}</div>`
-      : docs.ok ? `<div style="margin-top:6px">De RMM toont wat hier over ${docs.devices === 1 ? "1 apparaat" : `${docs.devices} apparaten`} is vastgelegd, onder <b>Docs</b> in het apparaatpaneel.</div>` : "";
-    host.innerHTML = `<div class="callout ${bad ? "warn" : "info"}" style="margin-bottom:16px">
-      <div class="ic">${bad ? ICON.alert : ICON.refresh}</div><div style="flex:1">
-      <div class="ct">${bad ? "De RMM antwoordt niet" : "Gekoppeld aan de RMM"}</div>
-      <div class="cd">${bad ? esc(s.detail) : `${s.users} gebruikers en ${s.orgs} klanten, bijgewerkt ${when}. Elke ${s.every_minutes} minuten opnieuw.`}
-        <button class="btn ghost sm" id="sync-now" style="margin-left:10px">Nu bijwerken</button>${docsLine}</div>
+    const problems = [];
+    if (s.ok === false) problems.push(`De RMM antwoordt niet: ${esc(s.detail)}.`);
+    else if (age > 3600) {
+      problems.push(s.at ? `De laatste geslaagde synchronisatie was ${ago(age)}.`
+                         : "Er is nog niet gesynchroniseerd met de RMM.");
+    }
+    if (docs.ok === false) problems.push(`Documentatie naar de RMM sturen lukt niet: ${esc(docs.detail)}.`);
+    if (!problems.length) { host.innerHTML = ""; return; }
+    host.innerHTML = `<div class="callout warn" style="margin-bottom:16px">
+      <div class="ic">${ICON.alert}</div><div style="flex:1">
+      <div class="ct">De koppeling met de RMM loopt niet</div>
+      <div class="cd">${problems.join(" ")}
+        <button class="btn ghost sm" id="sync-now" style="margin-left:10px">Nu bijwerken</button></div>
       </div></div>`;
     $("sync-now").onclick = async () => {
       $("sync-now").disabled = true;

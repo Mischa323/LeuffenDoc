@@ -94,11 +94,13 @@ window.DocSettings = function (ctx) {
         hint: "Te maken in de RMM onder <b>Instellingen → API &amp; webhooks</b>, zonder organisatie. Wordt versleuteld bewaard en nooit meer getoond.",
       })
       + field("DOC_SYNC_MINUTES", "Bijwerken elke (minuten)")
+      + `<div class="frow"><label>Laatst bijgewerkt</label><div class="hint" id="rmm-last" style="margin:0">…</div></div>`
       + field("DOC_RMM_INSECURE_TLS", "Certificaat", {
         check: "Een zelfondertekend certificaat van de RMM accepteren",
         hint: "Alleen voor een RMM op het eigen netwerk zonder geldig certificaat.",
       }),
       `<button class="btn ghost sm" id="rmm-test" title="Test met wat er is opgeslagen">${ICON.refresh} Verbinding testen</button>
+       <button class="btn ghost sm" id="rmm-sync" title="Gebruikers, klanten en apparaten nu ophalen">${ICON.refresh} Nu bijwerken</button>
        <span id="rmm-test-out" class="test-out"></span>`);
   }
 
@@ -440,6 +442,20 @@ window.DocSettings = function (ctx) {
     out.textContent = window.makePassword(cfg);
   }
 
+  // When the RMM was last synced, under its block.
+  async function drawRmmLast(host) {
+    const slot = host.querySelector("#rmm-last");
+    if (!slot) return;
+    let s;
+    try { s = await api("/api/rmm/status"); } catch (e) { return; }
+    if (!s.configured) { slot.textContent = "Nog niet gekoppeld."; return; }
+    const when = s.at ? new Date(s.at * 1000).toLocaleString("nl-NL") : "nog niet";
+    slot.textContent = s.ok === false
+      ? `Laatste poging ${when} mislukt: ${s.detail}`
+      : `Laatst bijgewerkt ${when}: ${s.users} gebruikers, ${s.orgs} klanten, ${s.devices || 0} apparaten. `
+        + `Elke ${s.every_minutes} minuten opnieuw.`;
+  }
+
   // ---- updating ----
   async function drawUpdate(host, st) {
     const slot = host.querySelector("#upd");
@@ -586,6 +602,21 @@ window.DocSettings = function (ctx) {
       blk.classList.toggle("hidden", !shown.includes((blk.id || "").replace(/^blk-/, "")));
     });
     drawUpdate(host);
+    drawRmmLast(host);
+    host.querySelector("#rmm-sync").onclick = async (ev) => {
+      const button = ev.currentTarget;
+      button.disabled = true;
+      const out = host.querySelector("#rmm-test-out");
+      out.textContent = "Bijwerken…";
+      out.className = "test-out";
+      try {
+        const r = await api("/api/rmm/sync", { method: "POST" });
+        out.textContent = r.ok ? "Bijgewerkt" : (r.detail || "Mislukt");
+        out.className = `test-out ${r.ok ? "good" : "bad"}`;
+        drawRmmLast(host);
+      } catch (e) { out.textContent = e.message; out.className = "test-out bad"; }
+      button.disabled = false;
+    };
     wireBackupButtons(host);
     host.querySelector("#pair-go").onclick = async (ev) => {
       const button = ev.currentTarget;

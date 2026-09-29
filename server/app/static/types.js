@@ -47,6 +47,8 @@ window.DocTypes = function (ctx) {
         <div class="tc-txt">
           <h3>${esc(spec.plural)}</h3>
           <small>${esc(spec.sub || "")}</small>
+          ${(spec.subtypes || []).length ? `<div class="tc-subs">${spec.subtypes.map((s) =>
+            `<span class="tag">${ICON[s.icon] || ""}${esc(s.label)}</span>`).join("")}</div>` : ""}
         </div>
         <div class="tc-meta">
           ${custom

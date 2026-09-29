@@ -265,7 +265,7 @@ def _role(device: dict) -> str:
         return "Server"
     if device.get("os_kind") == "linux":
         return "Server"
-    return "Werkplek"
+    return "Desktop"
 
 
 def device_payload(device: dict) -> dict:

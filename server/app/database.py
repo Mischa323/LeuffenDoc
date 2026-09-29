@@ -295,6 +295,11 @@ def after_restore() -> None:
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Additive migrations for databases created by an earlier version."""
+    # Configuration types got the names people use for them.
+    for (kind, old), new in (((("computer", "Werkplek"), "Desktop"),
+                              (("network", "Access point"), "Wifi-punt"))):
+        conn.execute("UPDATE items SET fields_json = json_set(fields_json, '$.role', ?) "
+                     "WHERE kind=? AND json_extract(fields_json, '$.role')=?", (new, kind, old))
     cols = {r[1] for r in conn.execute("PRAGMA table_info(secrets)")}
     if cols and "field_key" not in cols:
         # A vault entry used to hold one password. A type you define yourself
