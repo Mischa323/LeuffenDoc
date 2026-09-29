@@ -51,11 +51,17 @@
     $("code").focus();
     const go = async () => {
       $("go").disabled = true;
+      $("go").textContent = "Bezig…";
+      $("err").textContent = "";
       try {
         seen = await post("/api/setup/unlock", { code: $("code").value });
         code = $("code").value;
         choose();
-      } catch (e) { $("err").textContent = e.message; $("go").disabled = false; }
+      } catch (e) {
+        $("err").textContent = e.message;
+        $("go").disabled = false;
+        $("go").textContent = "Verder";
+      }
     };
     $("go").onclick = go;
     $("code").onkeydown = (ev) => { if (ev.key === "Enter") go(); };
@@ -120,12 +126,19 @@
       admins: $("admins").value.split(/[,;\s]+/).filter((a) => a.includes("@")),
     });
     $("pair").onclick = async () => {
+      const label = $("pair").innerHTML;
       $("pair").disabled = true;
+      $("pair").textContent = "De RMM wordt gecontroleerd…";
       $("err").textContent = "";
       try {
         const r = await post("/api/setup/pair", { ...common(), rmm_url: $("rmm").value.trim() });
+        $("pair").textContent = "Naar de RMM…";
         location.href = r.redirect;
-      } catch (e) { $("err").textContent = e.message; $("pair").disabled = false; }
+      } catch (e) {
+        $("err").textContent = e.message;
+        $("pair").disabled = false;
+        $("pair").innerHTML = label;
+      }
     };
     $("rmm").onkeydown = (ev) => { if (ev.key === "Enter") $("pair").click(); };
     $("save-manual").onclick = async () => {

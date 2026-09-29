@@ -34,17 +34,41 @@ class Unreachable(Exception):
 
 
 def clean_url(url: str) -> str | None:
-    parts = urllib.parse.urlsplit((url or "").strip())
+    text = (url or "").strip()
+    if text and "://" not in text:
+        text = "https://" + text            # "10.10.10.123:8000" means the RMM's https
+    parts = urllib.parse.urlsplit(text)
     if parts.scheme not in ("http", "https") or not parts.netloc:
         return None
     return f"{parts.scheme}://{parts.netloc}{parts.path.rstrip('/')}"
+
+
+def supports(url: str) -> bool | None:
+    """Whether the RMM at this address knows linking by button: True, False
+    (an older RMM), or None when this server cannot tell -- it may not reach
+    the address the browser uses, and then the browser simply goes ahead.
+
+    Only asks whether a page exists, sends nothing, so an unverified
+    certificate is no risk here."""
+    try:
+        with httpx.Client(timeout=5.0, verify=False) as client:
+            r = client.get(f"{url}/api/pair/info")
+    except httpx.HTTPError:
+        return None
+    if r.status_code == 404:
+        return False
+    return r.status_code in (200, 401, 403)
 
 
 def start(rmm_url: str, public_url: str, mode: str, extra: dict | None = None) -> str:
     """Remember a pairing in progress; the address to send the browser to."""
     rmm = clean_url(rmm_url)
     if not rmm:
-        raise ValueError("Vul het adres van de RMM in, beginnend met https://")
+        raise ValueError("Vul het adres van de RMM in, bijvoorbeeld https://rmm.jouwdomein.nl")
+    if supports(rmm) is False:
+        raise ValueError("Deze RMM kent koppelen met één knop nog niet. Werk de RMM eerst bij "
+                         "(in de RMM: Settings → General → Update, of via Dockge) en probeer het "
+                         "dan opnieuw — of koppel handmatig onder ‘Zelf aanpassen’.")
     doc = clean_url(public_url)
     if not doc:
         raise ValueError("Het adres van LeuffenDoc zelf ontbreekt")

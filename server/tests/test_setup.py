@@ -95,6 +95,20 @@ def test_one_button_links_with_the_rmm_and_finishes_set_up(fresh, monkeypatch):
     assert fresh.post("/api/koppelen/afronden", json={"state": state}).status_code == 400
 
 
+def test_an_rmm_without_linking_by_button_is_named_as_such(fresh, monkeypatch):
+    monkeypatch.setattr(pairing, "supports", lambda url: False)
+    refused = fresh.post("/api/setup/pair", json={"code": setup._code, "rmm_url": "10.10.10.123:8000",
+                                                  "public_url": "http://10.10.10.123:8100"})
+    assert refused.status_code == 400 and "bij" in refused.json()["detail"]
+    assert setup.needs()
+
+
+def test_an_address_without_a_scheme_means_https():
+    assert pairing.clean_url("10.10.10.123:8000/") == "https://10.10.10.123:8000"
+    assert pairing.clean_url("http://rmm.lan") == "http://rmm.lan"
+    assert pairing.clean_url("") is None
+
+
 def test_set_up_by_hand_needs_a_way_in_and_an_administrator(fresh):
     base = {"code": setup._code, "public_url": "https://doc.example.test"}
     assert fresh.post("/api/setup/manual", json=base).status_code == 400
