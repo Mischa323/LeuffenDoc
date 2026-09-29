@@ -295,6 +295,50 @@ def device_payload(device: dict) -> dict:
     }
 
 
+# --------------------------------------------------------------------------- #
+# Virtual machines on Hyper-V hosts
+#
+# They run no agent, so the RMM does not list them as devices -- but the host
+# reports them, and they are machines the customer has. Each becomes a
+# configuration of the type Virtuele machine, "Draait op" its host. Known by
+# customer and name (Hyper-V gives no id), so one that moves to another host
+# stays the same page and says where it runs now. A guest that has an agent of
+# its own is that device already, and only gets told where it runs.
+# --------------------------------------------------------------------------- #
+VM_PREFIX = "hv:"
+# What the history compares for a VM: how many processors it has. How much
+# memory it is using right now and whether it is running are shown, but not
+# written down every time they change -- that would be the whole history.
+VM_KEYS = ["cpu", "manufacturer", "model"]
+_VM_STATES = {"running": "Draait", "off": "Uit", "saved": "Opgeslagen", "paused": "Gepauzeerd",
+              "starting": "Start op", "stopping": "Stopt"}
+
+
+def vm_key(rmm_org: str, name: str) -> str:
+    return f"{VM_PREFIX}{rmm_org}:{name.strip().lower()}"
+
+
+def vm_payload(vm: dict, host: dict) -> dict:
+    vcpu = vm.get("vcpu")
+    memory = vm.get("mem_assigned") or 0
+    state = str(vm.get("state") or "")
+    return {"cpu": f"{vcpu} vCPU" if vcpu else "", "memory": _bytes(memory) if memory else "",
+            "storage": "", "os": "", "serial": "",
+            "manufacturer": "Microsoft", "model": "Hyper-V virtuele machine",
+            "vm_state": _VM_STATES.get(state.lower(), state),
+            "host": host.get("hostname"), "host_device_id": host.get("id")}
+
+
+def _runs_on(item_id: str, host_item_id: str, always: bool, label) -> None:
+    """Say where a machine runs. For a Hyper-V guest the host is the RMM's to
+    say; for a machine with an agent of its own only when nobody filled it in."""
+    item = database.get_item(item_id)
+    current = (item or {}).get("fields", {}).get("host")
+    if item and current != host_item_id and (always or not current):
+        database.update_item(item_id, fields={"host": host_item_id}, by=None,
+                             source="rmm", label=label)
+
+
 def sync_devices() -> dict:
     """Mirror every device the API key can see into the right customer."""
     devices = fetch_devices()
@@ -304,6 +348,8 @@ def sync_devices() -> dict:
 
     made = updated = 0
     seen = set()
+    host_items: dict = {}                  # device id -> its item
+    by_name: dict = {}                     # (customer, hostname) -> item, for guests with an agent
     for device in devices:
         org = (device.get("org") or {}).get("id")
         org_id = by_rmm_org.get(org)
@@ -313,6 +359,9 @@ def sync_devices() -> dict:
         payload = device_payload(device)
         existing = database.item_by_rmm_device(device["id"])
         if existing:
+            host_items[device["id"]] = existing["id"]
+            if device.get("hostname"):
+                by_name[(org_id, device["hostname"].strip().lower())] = existing["id"]
             database.update_item(existing["id"], rmm=payload, rmm_keys=keys,
                                  by=None, source="rmm", label=label)
             # Adapters are matched on their MAC, so the port a machine is
@@ -329,11 +378,49 @@ def sync_devices() -> dict:
                                         by=None, source="rmm", rmm_device_id=device["id"],
                                         rmm=payload, label=label)
             database.sync_adapters(item["id"], payload.get("nics"))
+            host_items[device["id"]] = item["id"]
+            if device.get("hostname"):
+                by_name[(org_id, device["hostname"].strip().lower())] = item["id"]
             made += 1
+    device_count = len(seen)
+
+    vms = vms_made = 0
+    for device in devices:
+        host_item = host_items.get(device.get("id"))
+        org = (device.get("org") or {}).get("id")
+        org_id = by_rmm_org.get(org)
+        if not host_item or not org_id:
+            continue
+        for vm in device.get("hyperv") or []:
+            name = str(vm.get("name") or "").strip()
+            if not name:
+                continue
+            twin = by_name.get((org_id, name.lower()))
+            if twin and twin != host_item:
+                _runs_on(twin, host_item, always=False, label=label)
+                continue
+            key = vm_key(org, name)
+            if key in seen:
+                continue                   # the same name twice on one customer's hosts
+            seen.add(key)
+            vms += 1
+            payload = vm_payload(vm, device)
+            existing = database.item_by_rmm_device(key)
+            if existing:
+                database.update_item(existing["id"], rmm=payload, rmm_keys=VM_KEYS,
+                                     by=None, source="rmm", label=label)
+                _runs_on(existing["id"], host_item, always=True, label=label)
+            else:
+                database.create_item(org_id, "computer", name,
+                                     {"role": "Virtuele machine", "status": "In gebruik",
+                                      "host": host_item},
+                                     by=None, source="rmm", rmm_device_id=key,
+                                     rmm=payload, label=label)
+                vms_made += 1
 
     # A device that is no longer in the RMM keeps its page and says so. It is
     # never removed here: what was documented about it is usually exactly what
-    # somebody needs afterwards.
+    # somebody needs afterwards. The same for a VM its host no longer reports.
     gone = 0
     for item in database.rmm_items():
         missing = item["rmm_device_id"] not in seen
@@ -341,4 +428,5 @@ def sync_devices() -> dict:
             database.mark_rmm_gone(item["id"], missing)
         if missing:
             gone += 1
-    return {"devices": len(seen), "new": made, "updated": updated, "gone": gone}
+    return {"devices": device_count, "new": made + vms_made, "updated": updated,
+            "gone": gone, "vms": vms}

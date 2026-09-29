@@ -63,6 +63,8 @@ COMPUTER = {
             _f("purpose", "Waar het voor dient", "textarea",
                hint="Waarom staat deze machine er — welke rol, welke toepassing."),
             _f("location", "Locatie", "ref", ref="location", icon="building"),
+            _f("host", "Draait op", "ref", ref="configuratie", icon="server",
+               hint="Voor een virtuele machine: de server waarop hij draait."),
             _f("user", "In gebruik bij", "ref", ref="contact", icon="user"),
         ]},
         {"key": "hardware", "label": "Hardware", "fields": [
@@ -73,6 +75,7 @@ COMPUTER = {
             _f("manufacturer", "Merk", rmm="manufacturer", icon="box"),
             _f("model", "Model", rmm="model", icon="box"),
             _f("serial", "Serienummer", rmm="serial", icon="clipboard"),
+            _f("vm_state", "In Hyper-V", rmm="vm_state", icon="layers"),
         ]},
         {"key": "beheer", "label": "Beheer", "fields": [
             _f("installed_at", "Geïnstalleerd op", "date"),
