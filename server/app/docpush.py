@@ -118,7 +118,7 @@ def summary(item: dict, by_id: dict, pointing: dict, shown: set,
             today: datetime.date, warn: int) -> dict:
     spec = schema.kind(item["kind"]) or {}
     fields = []
-    for key, field in schema.fields_of(item["kind"]).items():
+    for key, field in schema.shown_fields_of(item["kind"]).items():
         # The RMM already shows what it reported itself; secrets never travel.
         if field.get("rmm") or field["type"] == "secret":
             continue

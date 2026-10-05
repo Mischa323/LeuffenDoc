@@ -47,6 +47,18 @@ window.DocItems = function (ctx) {
     }
     return out;
   }
+  // What a person sees: a field hidden under Instellingen → Documenttypes keeps
+  // its value but appears nowhere -- not in a form, a page, a list or a warning.
+  const shownFieldsOf = (kind) => fieldsOf(kind).filter((f) => !f.hidden);
+
+  /* The blocks of a page, laid out as chosen under Documenttypes: each the
+     full width, or half -- two half blocks side by side. Blocks with nothing
+     to show are left out. */
+  function blocksHtml(parts) {
+    const shown = parts.filter((p) => p.html);
+    return shown.length ? `<div class="blocks">${shown.map((p) =>
+      p.html.replace(/^(\s*<div class="panel)/, `$1${p.width === "half" ? " half" : ""}`)).join("")}</div>` : "";
+  }
 
   /* Where a value comes from decides who may set it. A field the RMM fills is
      shown from the RMM and never typed here, so a documented memory size cannot
@@ -194,18 +206,21 @@ window.DocItems = function (ctx) {
 
   function formHtml(kind, item, all, orgId, prefill) {
     const spec = KINDS[kind];
-    return spec.groups.map((group) => `
+    return blocksHtml(spec.groups.map((group) => {
+      const fields = group.fields.filter((f) => !f.hidden);
+      return { width: group.width, html: fields.length ? `
       <div class="panel form-block">
         <div class="panel-head"><h2>${esc(group.label)}</h2></div>
         <div class="form-body">
-          ${group.fields.map((f) => `<div class="frow">
+          ${fields.map((f) => `<div class="frow">
             <label for="f-${f.key}">${f.icon && ICON[f.icon]
               ? `<span class="lb-ic">${ICON[f.icon]}</span>` : ""}${esc(f.label)}</label>
             ${inputFor(f, item ? valueOf(item, f) : ((prefill || {})[f.key] || ""), all, orgId)}
             ${f.hint ? `<div class="hint">${esc(f.hint)}</div>` : ""}
           </div>`).join("")}
         </div>
-      </div>`).join("");
+      </div>` : "" };
+    }));
   }
 
   function readForm(root) {
@@ -240,7 +255,7 @@ window.DocItems = function (ctx) {
   // ---- list ----
   function columnsOf(kind) {
     const wanted = KINDS[kind].columns || [];
-    const byKey = Object.fromEntries(fieldsOf(kind).map((f) => [f.key, f]));
+    const byKey = Object.fromEntries(shownFieldsOf(kind).map((f) => [f.key, f]));
     return wanted.map((k) => byKey[k]).filter(Boolean);
   }
 
@@ -466,11 +481,12 @@ window.DocItems = function (ctx) {
         <div class="ih-act" id="item-actions"></div>
       </div>`;
 
-    const readBlocks = () => spec.groups.map((group) => {
+    const readBlocks = () => blocksHtml(spec.groups.map((group) => ({ width: group.width, html: (() => {
+      const fields = group.fields.filter((f) => !f.hidden);
       // A page of text does not belong in a label-and-value grid; it gets the
       // width of the panel and keeps the line breaks it was written with.
-      const long = group.fields.filter((f) => f.long && display(item, f, all));
-      const rows = group.fields.filter((f) => !f.long).map((f) => {
+      const long = fields.filter((f) => f.long && display(item, f, all));
+      const rows = fields.filter((f) => !f.long).map((f) => {
         const text = display(item, f, all);
         if (!text) return "";
         const raw = valueOf(item, f);
@@ -491,7 +507,7 @@ window.DocItems = function (ctx) {
           ${rows ? `<div class="deflist">${rows}</div>` : ""}
           ${long.map((f) => `<div class="longtext">${esc(display(item, f, all))}</div>`).join("")}
         </div>`;
-    }).join("") || `<div class="panel"><div class="empty">
+    })() }))) || `<div class="panel"><div class="empty">
         <div>Nog niets ingevuld</div>
         <div style="font-size:12.5px;margin-top:6px">Druk op <b>Bewerken</b> om de velden in te vullen.</div>
       </div></div>`;
@@ -591,7 +607,7 @@ window.DocItems = function (ctx) {
        with an administrator password and a break-glass account, say. */
     function secretSlots() {
       const out = item.kind === "password" ? [{ field: "main", label: "Wachtwoord" }] : [];
-      for (const f of fieldsOf(item.kind)) {
+      for (const f of shownFieldsOf(item.kind)) {
         if (f.type === "secret") out.push({ field: f.key, label: f.label, hint: f.hint });
       }
       return out;
@@ -1364,7 +1380,7 @@ window.DocItems = function (ctx) {
     const out = [];
     for (const item of all) {
       if (item.archived) continue;
-      for (const field of fieldsOf(item.kind)) {
+      for (const field of shownFieldsOf(item.kind)) {
         const flag = expiry(field, valueOf(item, field));
         if (flag) out.push({ item, field, flag, on: valueOf(item, field) });
       }

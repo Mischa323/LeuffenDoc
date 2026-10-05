@@ -252,10 +252,21 @@ CREATE TABLE IF NOT EXISTS item_types (
     adapters     INTEGER NOT NULL DEFAULT 0,
     columns_json TEXT NOT NULL DEFAULT '[]',
     fields_json  TEXT NOT NULL DEFAULT '[]',
+    layout_json  TEXT NOT NULL DEFAULT '{}',   -- its blocks and what sits in each (schema.arrange)
     created_at   REAL NOT NULL,
     created_by   TEXT,
     updated_at   REAL NOT NULL,
     updated_by   TEXT
+);
+
+-- How a built-in kind is laid out here: its blocks, the order of its fields,
+-- fields renamed or hidden, and fields added to it (see schema.arrange). No row
+-- means the layout from the code.
+CREATE TABLE IF NOT EXISTS kind_layouts (
+    kind        TEXT PRIMARY KEY,
+    layout_json TEXT NOT NULL,
+    updated_at  REAL NOT NULL,
+    updated_by  TEXT
 );
 """
 
@@ -333,6 +344,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE secrets ADD COLUMN strength INTEGER")
         conn.execute("ALTER TABLE secrets ADD COLUMN fingerprint TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_secrets_fingerprint ON secrets(fingerprint)")
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(item_types)")}
+    if "layout_json" not in cols:
+        # A type made here used to be one block, "Gegevens"; it still is until
+        # someone lays it out in more.
+        conn.execute("ALTER TABLE item_types ADD COLUMN layout_json TEXT NOT NULL DEFAULT '{}'")
 
 
 def get_conn() -> sqlite3.Connection:
@@ -1014,6 +1030,7 @@ def _type_out(r: dict) -> dict:
     r = dict(r)
     r["fields"] = json.loads(r.pop("fields_json", None) or "[]")
     r["columns"] = json.loads(r.pop("columns_json", None) or "[]")
+    r["layout"] = json.loads(r.pop("layout_json", None) or "{}")
     r["adapters"] = bool(r.get("adapters"))
     return r
 
@@ -1034,21 +1051,60 @@ def save_item_type(type_id: str, spec: dict, by: str | None, creating: bool) -> 
         if creating:
             conn.execute(
                 "INSERT INTO item_types (id, label, plural, icon, sub, backref, adapters, "
-                "columns_json, fields_json, created_at, created_by, updated_at, updated_by) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "columns_json, fields_json, layout_json, created_at, created_by, updated_at, "
+                "updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (type_id, spec["label"], spec["plural"], spec.get("icon"), spec.get("sub"),
                  spec.get("backref"), int(bool(spec.get("adapters"))),
                  json.dumps(spec.get("columns") or []), json.dumps(spec.get("fields") or []),
-                 now, by, now, by))
+                 json.dumps(spec.get("layout") or {}), now, by, now, by))
         else:
             conn.execute(
                 "UPDATE item_types SET label=?, plural=?, icon=?, sub=?, backref=?, adapters=?, "
-                "columns_json=?, fields_json=?, updated_at=?, updated_by=? WHERE id=?",
+                "columns_json=?, fields_json=?, layout_json=?, updated_at=?, updated_by=? "
+                "WHERE id=?",
                 (spec["label"], spec["plural"], spec.get("icon"), spec.get("sub"),
                  spec.get("backref"), int(bool(spec.get("adapters"))),
                  json.dumps(spec.get("columns") or []), json.dumps(spec.get("fields") or []),
-                 now, by, type_id))
+                 json.dumps(spec.get("layout") or {}), now, by, type_id))
     return get_item_type(type_id)
+
+
+def kind_layouts() -> dict:
+    """The layouts saved for built-in kinds, by kind."""
+    return {r["kind"]: json.loads(r["layout_json"] or "{}")
+            for r in rows("SELECT kind, layout_json FROM kind_layouts")}
+
+
+def kind_layout_meta(kind: str) -> dict | None:
+    return row("SELECT updated_at, updated_by FROM kind_layouts WHERE kind=?", (kind,))
+
+
+def save_kind_layout(kind: str, layout: dict, by: str | None) -> None:
+    with write() as conn:
+        conn.execute("INSERT INTO kind_layouts (kind, layout_json, updated_at, updated_by) "
+                     "VALUES (?, ?, ?, ?) ON CONFLICT(kind) DO UPDATE SET "
+                     "layout_json=excluded.layout_json, updated_at=excluded.updated_at, "
+                     "updated_by=excluded.updated_by",
+                     (kind, json.dumps(layout), time.time(), by))
+
+
+def delete_kind_layout(kind: str) -> None:
+    with write() as conn:
+        conn.execute("DELETE FROM kind_layouts WHERE kind=?", (kind,))
+
+
+def filled_fields(kind: str, keys: set) -> dict:
+    """How many items of a kind have something in each of these fields -- what
+    removing them would throw away."""
+    filled: dict = {}
+    if not keys:
+        return filled
+    for item in rows("SELECT fields_json FROM items WHERE kind=?", (kind,)):
+        stored = json.loads(item["fields_json"] or "{}")
+        for key in keys:
+            if stored.get(key) not in (None, "", []):
+                filled[key] = filled.get(key, 0) + 1
+    return filled
 
 
 def delete_item_type(type_id: str) -> None:

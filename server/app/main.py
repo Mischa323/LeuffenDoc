@@ -366,7 +366,7 @@ def expiring_everywhere(user: dict = Depends(auth.current_user)):
         for item in database.list_items(org["id"]):
             if item["id"] in hidden:
                 continue
-            for field in schema.fields_of(item["kind"]).values():
+            for field in schema.shown_fields_of(item["kind"]).values():
                 if not field.get("expiry") or field["type"] != "date":
                     continue
                 value = item["fields"].get(field["key"])
@@ -1151,86 +1151,189 @@ def search(q: str = "", user: dict = Depends(auth.current_user)):
 RESERVED_KEYS = {"naam", "id", "kind", "org_id", "secret", "port", "adapter"}
 
 
+def _clean_field(raw: dict, seen: set, prefix: str = "") -> dict | None:
+    """One field somebody defined, checked and given a key. ``seen`` holds the
+    keys already taken and is added to; ``prefix`` marks a field added to a
+    built-in kind (see schema.EXTRA_PREFIX)."""
+    flabel = (raw.get("label") or "").strip()[:80]
+    if not flabel:
+        return None
+    ftype = raw.get("type") or "text"
+    if ftype not in schema.CUSTOM_FIELD_TYPES:
+        raise HTTPException(status_code=400, detail=f"Onbekend soort veld: {ftype}")
+    key = (raw.get("key") or "").strip()
+    if not key or (prefix and not key.startswith(prefix)):
+        key = prefix + schema.slug(flabel).replace("-", "_")
+    if key in RESERVED_KEYS:
+        key = f"f_{key}"
+    # Two fields with one key would overwrite each other on save, silently.
+    base, n = key, 2
+    while key in seen:
+        key, n = f"{base}_{n}", n + 1
+    seen.add(key)
+    field = {"key": key, "label": flabel, "type": ftype}
+    if ftype == "select":
+        options = [str(o).strip() for o in (raw.get("options") or []) if str(o).strip()]
+        if not options:
+            raise HTTPException(status_code=400,
+                                detail=f"Geef keuzes op voor het veld “{flabel}”")
+        field["options"] = options
+    if ftype == "ref":
+        target = raw.get("ref")
+        if target != "configuratie" and not schema.kind(target):
+            raise HTTPException(status_code=400,
+                                detail=f"Het veld “{flabel}” verwijst naar een "
+                                       "soort die niet bestaat")
+        field["ref"] = target
+    if ftype == "list" and raw.get("labels"):
+        field["labels"] = [str(o).strip() for o in raw["labels"] if str(o).strip()]
+    if raw.get("hint"):
+        field["hint"] = str(raw["hint"]).strip()
+    if raw.get("icon"):
+        field["icon"] = str(raw["icon"]).strip()
+    if raw.get("long"):
+        field["long"] = True
+    if raw.get("expiry") and ftype == "date":
+        field["expiry"] = True
+    return field
+
+
+def _block(raw: dict, taken: set) -> dict:
+    """A block's name, key and width; a new block gets a key from its name."""
+    label = (raw.get("label") or "").strip()[:60] or "Blok"
+    key = (raw.get("key") or "").strip() or "g_" + schema.slug(label).replace("-", "_")
+    base, n = key, 2
+    while key in taken:
+        key, n = f"{base}_{n}", n + 1
+    taken.add(key)
+    width = raw.get("width") if raw.get("width") in schema.WIDTHS else "full"
+    return {"key": key, "label": label, "width": width}
+
+
+def _clean_columns(wanted: list, fields: list) -> list:
+    """The columns a list shows. A field that is new has no key yet, so the
+    form names its column by label; either spelling is accepted and stored as
+    the key. A secret has no value on the item, so as a column it would only
+    ever be empty -- and a list is exactly where a secret must never appear --
+    and a hidden field is not shown anywhere."""
+    usable = [f for f in fields if f["type"] != "secret" and not f.get("hidden")]
+    keys = {f["key"] for f in usable}
+    by_label = {f["label"]: f["key"] for f in usable}
+    columns = []
+    for want in wanted or []:
+        key = want if want in keys else by_label.get(want)
+        if key and key not in columns:
+            columns.append(key)
+    return columns[:5]
+
+
 def _clean_type(body: dict, existing: dict | None) -> dict:
     label = (body.get("label") or "").strip()
     if not label:
         raise HTTPException(status_code=400, detail="Geef het type een naam")
     plural = (body.get("plural") or "").strip() or f"{label}en"
 
-    fields, seen = [], set()
-    for raw in body.get("fields") or []:
-        flabel = (raw.get("label") or "").strip()
-        if not flabel:
-            continue
-        ftype = raw.get("type") or "text"
-        if ftype not in schema.CUSTOM_FIELD_TYPES:
-            raise HTTPException(status_code=400, detail=f"Onbekend soort veld: {ftype}")
-        key = (raw.get("key") or "").strip() or schema.slug(flabel).replace("-", "_")
-        if key in RESERVED_KEYS:
-            key = f"f_{key}"
-        # Two fields with one key would overwrite each other on save, silently.
-        base, n = key, 2
-        while key in seen:
-            key, n = f"{base}_{n}", n + 1
-        seen.add(key)
-        field = {"key": key, "label": flabel, "type": ftype}
-        if ftype == "select":
-            options = [o.strip() for o in (raw.get("options") or []) if str(o).strip()]
-            if not options:
-                raise HTTPException(status_code=400,
-                                    detail=f"Geef keuzes op voor het veld “{flabel}”")
-            field["options"] = options
-        if ftype == "ref":
-            target = raw.get("ref")
-            if not schema.kind(target):
-                raise HTTPException(status_code=400,
-                                    detail=f"Het veld “{flabel}” verwijst naar een "
-                                           "soort die niet bestaat")
-            field["ref"] = target
-        if ftype == "list" and raw.get("labels"):
-            field["labels"] = [str(o).strip() for o in raw["labels"] if str(o).strip()]
-        if raw.get("hint"):
-            field["hint"] = str(raw["hint"]).strip()
-        if raw.get("icon"):
-            field["icon"] = str(raw["icon"]).strip()
-        if raw.get("long"):
-            field["long"] = True
-        if raw.get("expiry") and ftype == "date":
-            field["expiry"] = True
-        fields.append(field)
+    # Laid out in blocks, or (from an older page, or the API) one plain list.
+    raw_groups = body.get("groups")
+    if not raw_groups:
+        raw_groups = [{"key": "gegevens", "label": "Gegevens", "fields": body.get("fields") or []}]
+    fields, seen, layout, taken = [], set(), [], set()
+    for raw_group in raw_groups:
+        block = _block(raw_group, taken)
+        keys = []
+        for raw in raw_group.get("fields") or []:
+            field = _clean_field(raw, seen)
+            if field:
+                fields.append(field)
+                keys.append(field["key"])
+        layout.append({**block, "fields": keys})
 
     if not fields:
         raise HTTPException(status_code=400, detail="Een type zonder velden legt niets vast")
-
-    # A field that is new has no key yet, so the form names its column by
-    # label; either spelling is accepted and stored as the key.
-    # A secret has no value on the item, so as a column it would only ever be
-    # empty -- and a list is exactly where a secret must never appear.
-    keys = {f["key"] for f in fields if f["type"] != "secret"}
-    by_label = {f["label"]: f["key"] for f in fields if f["type"] != "secret"}
-    columns = []
-    for want in body.get("columns") or []:
-        key = want if want in keys else by_label.get(want)
-        if key and key not in columns:
-            columns.append(key)
-    columns = columns[:4]
     return {"label": label, "plural": plural,
             "icon": (body.get("icon") or "layers").strip(),
             "sub": (body.get("sub") or "").strip(),
             "backref": (body.get("backref") or "").strip() or "Wat hiernaar verwijst",
             "adapters": bool(body.get("adapters")),
-            "columns": columns, "fields": fields}
+            "columns": _clean_columns(body.get("columns"), fields), "fields": fields,
+            "layout": {"groups": layout}}
+
+
+def _clean_layout(kind: str, body: dict) -> dict:
+    """A layout for a built-in kind, from the editor's blocks.
+
+    A field the code defines keeps its key and its sort -- the RMM sync, the
+    Hyper-V guests, the switch ports and the vault count on both -- and may only
+    be renamed, explained differently, hidden, or (a list of choices) given
+    other choices. Anything else in a block is a field added here."""
+    base = {f["key"]: f for g in schema.BUILT_IN[kind]["groups"] for f in g["fields"]}
+    seen = set(base) | RESERVED_KEYS
+    groups, overrides, extra, taken, placed = [], {}, [], set(), set()
+    for raw_group in body.get("groups") or []:
+        block = _block(raw_group, taken)
+        keys = []
+        for raw in raw_group.get("fields") or []:
+            key = (raw.get("key") or "").strip()
+            if key in base:
+                if key in placed:
+                    continue
+                field, change = base[key], {}
+                label = (raw.get("label") or "").strip()[:80]
+                if label and label != field["label"]:
+                    change["label"] = label
+                hint = (raw.get("hint") or "").strip()
+                if hint != (field.get("hint") or ""):
+                    change["hint"] = hint
+                if raw.get("hidden") and key not in schema.ALWAYS_SHOWN:
+                    change["hidden"] = True
+                if field["type"] == "select" and key not in schema.ALWAYS_SHOWN:
+                    options = [str(o).strip() for o in (raw.get("options") or []) if str(o).strip()]
+                    if options and options != field["options"]:
+                        change["options"] = options
+                if change:
+                    overrides[key] = change
+                keys.append(key)
+                placed.add(key)
+                continue
+            field = _clean_field(raw, seen, prefix=schema.EXTRA_PREFIX)
+            if field:
+                extra.append(field)
+                keys.append(field["key"])
+        groups.append({**block, "fields": keys})
+    if not groups:
+        raise HTTPException(status_code=400, detail="Een indeling zonder blokken laat niets zien")
+    shown = [{**base[k], **overrides.get(k, {})} for k in base] + extra
+    return {"groups": groups, "overrides": overrides, "extra": extra,
+            "columns": _clean_columns(body.get("columns"), shown)}
+
+
+def _removed_with_data(kind: str, gone: set, labels: dict, confirmed: bool) -> None:
+    """A field that disappears takes what was filled in with it, so say which
+    ones and how much rather than letting it be found out later."""
+    if not gone or confirmed:
+        return
+    filled = database.filled_fields(kind, gone)
+    if filled:
+        names = ", ".join(f"“{labels[k]}” ({filled[k]}×)" for k in labels if k in filled)
+        raise HTTPException(status_code=409,
+                            detail=f"Deze velden zijn ingevuld en gaan verloren: {names}")
 
 
 @app.get("/api/types")
 def list_types(user: dict = Depends(auth.current_user)):
     """Everything that can be documented: the built-in kinds, marked as such,
     and the ones defined here."""
-    return {"built_in": [{"id": name, **spec} for name, spec in schema.BUILT_IN.items()],
+    def changed(name):
+        meta = database.kind_layout_meta(name)
+        return {"layout_updated_at": meta["updated_at"], "layout_updated_by": meta["updated_by"]} \
+            if meta else {}
+    return {"built_in": [{"id": name, **spec, "count": database.items_of_kind(name), **changed(name)}
+                         for name, spec in schema.built_in().items()],
             "custom": [{**database.get_item_type(t["id"]), **schema.custom()[t["id"]],
                         "id": t["id"], "count": database.items_of_kind(t["id"])}
                        for t in database.list_item_types()],
-            "field_types": schema.CUSTOM_FIELD_TYPES}
+            "field_types": schema.CUSTOM_FIELD_TYPES,
+            "always_shown": sorted(schema.ALWAYS_SHOWN)}
 
 
 @app.post("/api/types")
@@ -1258,26 +1361,53 @@ async def edit_type(type_id: str, request: Request,
         raise HTTPException(status_code=404, detail="Dit type bestaat niet")
     body = await request.json()
     spec = _clean_type(body, existing)
-    # A field that disappears takes what was filled in with it, so say which
-    # ones and how much rather than letting it be found out later.
     gone = {f["key"] for f in existing["fields"]} - {f["key"] for f in spec["fields"]}
-    if gone and not body.get("confirm_removals"):
-        filled = {}
-        for item in database.rows("SELECT fields_json FROM items WHERE kind=?", (type_id,)):
-            stored = json.loads(item["fields_json"] or "{}")
-            for key in gone:
-                if stored.get(key):
-                    filled[key] = filled.get(key, 0) + 1
-        if filled:
-            names = ", ".join(f"“{f['label']}” ({filled[f['key']]}×)"
-                              for f in existing["fields"] if f["key"] in filled)
-            raise HTTPException(status_code=409,
-                                detail=f"Deze velden zijn ingevuld en gaan verloren: {names}")
+    _removed_with_data(type_id, gone, {f["key"]: f["label"] for f in existing["fields"]},
+                       bool(body.get("confirm_removals")))
     database.save_item_type(type_id, spec, by=user["email"], creating=False)
     schema.forget_custom()
     database.audit("type.update", user_email=user["email"], target=spec["label"],
                    ip=auth.client_ip(request))
     return {"id": type_id, **schema.custom()[type_id]}
+
+
+@app.put("/api/types/{kind}/layout")
+async def save_layout(kind: str, request: Request, user: dict = Depends(auth.current_user)):
+    """The layout of a built-in kind: its blocks, and which fields go where."""
+    auth.require_admin(user)
+    if kind not in schema.BUILT_IN:
+        raise HTTPException(status_code=404, detail="Dit is geen ingebouwd type")
+    body = await request.json()
+    layout = _clean_layout(kind, body)
+    before = database.kind_layouts().get(kind) or {}
+    old_extra = {f["key"]: f["label"] for f in before.get("extra") or []}
+    gone = set(old_extra) - {f["key"] for f in layout["extra"]}
+    _removed_with_data(kind, gone, old_extra, bool(body.get("confirm_removals")))
+    database.save_kind_layout(kind, layout, by=user["email"])
+    schema.forget_custom()
+    database.audit("type.layout", user_email=user["email"], target=schema.BUILT_IN[kind]["label"],
+                   detail=f"{len(layout['groups'])} blokken, {len(layout['extra'])} eigen velden, "
+                          f"{sum(1 for o in layout['overrides'].values() if o.get('hidden'))} verborgen",
+                   ip=auth.client_ip(request))
+    return {"id": kind, **schema.built_in()[kind]}
+
+
+@app.delete("/api/types/{kind}/layout")
+def reset_layout(kind: str, request: Request, confirm: bool = False,
+                 user: dict = Depends(auth.current_user)):
+    """Back to the layout from the code. Fields added here go with it -- which
+    is said first when anything was filled in."""
+    auth.require_admin(user)
+    if kind not in schema.BUILT_IN:
+        raise HTTPException(status_code=404, detail="Dit is geen ingebouwd type")
+    before = database.kind_layouts().get(kind) or {}
+    extra = {f["key"]: f["label"] for f in before.get("extra") or []}
+    _removed_with_data(kind, set(extra), extra, confirm)
+    database.delete_kind_layout(kind)
+    schema.forget_custom()
+    database.audit("type.layout.reset", user_email=user["email"],
+                   target=schema.BUILT_IN[kind]["label"], ip=auth.client_ip(request))
+    return {"id": kind, **schema.built_in()[kind]}
 
 
 @app.delete("/api/types/{type_id}")

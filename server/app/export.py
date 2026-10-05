@@ -88,7 +88,7 @@ def gather(org: dict, hidden: set, with_passwords: bool) -> tuple[dict, list]:
     for item in items:
         spec = kinds.get(item["kind"], {})
         fields = []
-        for key, field in schema.fields_of(item["kind"]).items():
+        for key, field in schema.shown_fields_of(item["kind"]).items():
             if field["type"] == "secret":
                 continue
             value = raw_value(item, field)
@@ -251,7 +251,7 @@ def to_csv(data: dict) -> dict:
     sheets = {}
     for name, spec, members in _order(data):
         labels = []
-        for field in schema.fields_of(name).values():
+        for field in schema.shown_fields_of(name).values():
             if field["type"] != "secret":
                 labels.append(field["label"])
         secret_labels = [label for _, label in _secret_slots(name)] if data["with_passwords"] else []

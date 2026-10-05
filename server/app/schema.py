@@ -368,21 +368,96 @@ CUSTOM_FIELD_TYPES = ["text", "textarea", "number", "date", "select", "bool",
                       "ip", "mac", "list", "secret", "ref"]
 
 _custom: dict | None = None
+_built_in: dict | None = None
+
+# --------------------------------------------------------------------------- #
+# Layouts: the blocks of a type, and what sits in each
+#
+# Built in or made here, a type's page is laid out in blocks. Which blocks, in
+# what order, how wide, and which fields go where is up to whoever runs this
+# server -- stored as a layout and laid over the definition at run time, so the
+# code below still says what a field *is* and the layout only where it goes.
+#
+# A built-in field can be moved, renamed, explained differently and hidden,
+# but not removed or turned into something else: the RMM sync, the Hyper-V
+# guests, the switch ports and the vault count on it. A hidden field keeps its
+# value and simply is not shown. New fields can be added to any type; on a
+# built-in one their keys start with "x_", so a field a later version adds to
+# the code can never collide with one somebody made here.
+# --------------------------------------------------------------------------- #
+WIDTHS = ("full", "half")
+# The type of a configuration: the sidebar and the configuration types hang on it.
+ALWAYS_SHOWN = {"role"}
+EXTRA_PREFIX = "x_"
 
 
 def forget_custom() -> None:
     """Drop the cached definitions after one is written."""
-    global _custom
+    global _custom, _built_in
     _custom = None
+    _built_in = None
+
+
+def arrange(spec: dict, layout: dict | None) -> dict:
+    """A type with a layout laid over it: its blocks, in order, each with its
+    fields; overrides applied; fields added here included. Whatever the layout
+    does not mention -- a field a later version of the code added -- lands at
+    the end of the block it was defined in, so nothing ever disappears."""
+    if not layout:
+        return spec
+    pool: dict[str, tuple[dict, str | None]] = {}
+    overrides = layout.get("overrides") or {}
+    for group in spec["groups"]:
+        for field in group["fields"]:
+            merged = dict(field)
+            change = overrides.get(field["key"]) or {}
+            if change.get("label"):
+                merged["label"] = change["label"]
+            if "hint" in change:
+                if change["hint"]:
+                    merged["hint"] = change["hint"]
+                else:
+                    merged.pop("hint", None)
+            if change.get("options") and field["type"] == "select" and field["key"] not in ALWAYS_SHOWN:
+                merged["options"] = list(change["options"])
+            if change.get("hidden") and field["key"] not in ALWAYS_SHOWN:
+                merged["hidden"] = True
+            pool[field["key"]] = (merged, group["key"])
+    for field in layout.get("extra") or []:
+        if field.get("key") and field["key"] not in pool:
+            pool[field["key"]] = ({**field, "extra": True}, None)
+
+    groups, placed = [], set()
+    for group in layout.get("groups") or []:
+        fields = []
+        for key in group.get("fields") or []:
+            if key in pool and key not in placed:
+                fields.append(pool[key][0])
+                placed.add(key)
+        groups.append({"key": group["key"], "label": group.get("label") or "Blok",
+                       "width": group.get("width") if group.get("width") in WIDTHS else "full",
+                       "fields": fields})
+    for key, (field, born_in) in pool.items():
+        if key in placed:
+            continue
+        target = next((g for g in groups if g["key"] == born_in), None)
+        if target is None:
+            if not groups:
+                groups.append({"key": "gegevens", "label": "Gegevens", "width": "full", "fields": []})
+            target = groups[-1]
+        target["fields"].append(field)
+
+    shown = {f["key"] for g in groups for f in g["fields"]
+             if not f.get("hidden") and f["type"] != "secret"}
+    columns = [c for c in (layout.get("columns") if layout.get("columns") is not None
+                           else spec.get("columns") or []) if c in shown]
+    return {**spec, "groups": groups, "columns": columns, "customized": True}
 
 
 def _as_spec(row: dict) -> dict:
-    """One stored definition in the shape the built-in ones have.
-
-    A type made here has a single group: naming sections is one more thing to
-    explain for very little, and the page reads fine with one.
-    """
-    return {
+    """One stored definition in the shape the built-in ones have: one block,
+    "Gegevens", until someone lays it out in more."""
+    spec = {
         "label": row["label"], "plural": row["plural"],
         "icon": row.get("icon") or "layers",
         "family": "eigen",
@@ -391,9 +466,14 @@ def _as_spec(row: dict) -> dict:
         "columns": row.get("columns") or [],
         "custom": True,
         "adapters": bool(row.get("adapters")),
-        "groups": [{"key": "gegevens", "label": "Gegevens",
+        "groups": [{"key": "gegevens", "label": "Gegevens", "width": "full",
                     "fields": row.get("fields") or []}],
     }
+    layout = row.get("layout") or {}
+    if layout.get("groups"):
+        spec = arrange(spec, {"groups": layout["groups"], "columns": spec["columns"]})
+        spec.pop("customized", None)
+    return spec
 
 
 def custom() -> dict:
@@ -406,8 +486,20 @@ def custom() -> dict:
     return _custom
 
 
+def built_in() -> dict:
+    """The built-in kinds, each with its saved layout (if any) laid over it."""
+    global _built_in
+    if _built_in is None:
+        try:
+            saved = database.kind_layouts()
+        except Exception:                      # before the database exists
+            return BUILT_IN
+        _built_in = {name: arrange(spec, saved.get(name)) for name, spec in BUILT_IN.items()}
+    return _built_in
+
+
 def KINDS_all() -> dict:
-    return {**BUILT_IN, **custom()}
+    return {**built_in(), **custom()}
 
 
 def slug(label: str) -> str:
@@ -437,12 +529,19 @@ def kind(name: str) -> dict | None:
 
 
 def fields_of(name: str) -> dict[str, dict]:
-    """Every field of a kind, keyed, with its group folded in."""
+    """Every field of a kind, keyed, with its group folded in -- hidden ones
+    included: they still hold a value, which must survive a save."""
     out: dict[str, dict] = {}
     for group in KINDS_all().get(name, {}).get("groups", []):
         for field in group["fields"]:
             out[field["key"]] = {**field, "group": group["key"]}
     return out
+
+
+def shown_fields_of(name: str) -> dict[str, dict]:
+    """The fields a person sees: what pages, warnings, exports and the RMM's
+    Docs tab go by."""
+    return {k: f for k, f in fields_of(name).items() if not f.get("hidden")}
 
 
 def catalogue() -> dict:
