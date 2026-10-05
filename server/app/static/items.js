@@ -39,6 +39,33 @@ window.DocItems = function (ctx) {
 
   const forget = (orgId) => indexes.delete(orgId);
 
+  // Pasting a screenshot onto an item's page, and the photo viewer's keys: one
+  // listener each, pointed at whichever item page is open.
+  let pasteInto = null;
+  let viewerKeys = null;
+  function closeViewer() {
+    const open = document.getElementById("viewer");
+    if (open) open.remove();
+    viewerKeys = null;
+  }
+  window.addEventListener("hashchange", closeViewer);
+  document.addEventListener("keydown", (ev) => {
+    if (viewerKeys && document.getElementById("viewer")) viewerKeys(ev);
+  });
+  document.addEventListener("paste", (ev) => {
+    if (!pasteInto || !document.getElementById("files-drop")) return;
+    const target = ev.target;
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+    const pasted = [...((ev.clipboardData && ev.clipboardData.files) || [])];
+    if (!pasted.length) return;
+    ev.preventDefault();
+    // A screenshot comes as "image.png"; give it a name worth finding again.
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[T:]/g, "-");
+    pasteInto(pasted.map((f, i) => (f.name && f.name !== "image.png") ? f
+      : new File([f], `schermafbeelding-${stamp}${pasted.length > 1 ? `-${i + 1}` : ""}.${f.type.split("/")[1] || "png"}`,
+                 { type: f.type })));
+  });
+
   // ---- fields ----
   function fieldsOf(kind) {
     const out = [];
@@ -618,6 +645,7 @@ window.DocItems = function (ctx) {
              <div class="form-foot"><button class="btn ghost" id="edit-cancel">Annuleren</button>
                <button class="btn" id="edit-save">${ICON.save} Opslaan</button></div>`
                    : readBlocks()
+                     + `<div id="files"></div>`
                      + `<div id="secret"></div><div id="access"></div>`
                      + `<div id="adapters"></div><div id="ports"></div>`
                      + `<div id="passwords"></div><div id="referred"></div>`
@@ -638,6 +666,7 @@ window.DocItems = function (ctx) {
         host.querySelectorAll("[data-goto]").forEach((a) => {
           a.onclick = () => go(`#/klant/${org.id}/item/${a.dataset.goto}`);
         });
+        drawFiles();
         drawSecret();
         drawAccess();
         drawAdapters();
@@ -696,6 +725,153 @@ window.DocItems = function (ctx) {
         toast("Opgeslagen");
         draw();
       } catch (e) { toast(e.message); btn.disabled = false; }
+    }
+
+    /* Photos and files: the rack, the label with the serial number, the manual,
+       an exported configuration. Added from here without editing the item --
+       chosen, dragged onto the panel, or pasted (a screenshot) -- and photos
+       shown straight away, as a gallery. */
+    const kb = (n) => n >= 1048576 ? `${(n / 1048576).toFixed(1).replace(".", ",")} MB`
+      : `${Math.max(1, Math.round(n / 1024))} kB`;
+    let files = [];
+
+    async function drawFiles() {
+      const slot = host.querySelector("#files");
+      if (!slot) return;
+      try { files = await api(`/api/items/${item.id}/attachments`); } catch (e) { return; }
+      if (!files.length && !mayEdit) { slot.innerHTML = ""; return; }
+      const pictures = files.filter((f) => f.is_image);
+      const others = files.filter((f) => !f.is_image);
+      const counted = [pictures.length ? `${pictures.length} ${pictures.length === 1 ? "foto" : "foto's"}` : "",
+                       others.length ? `${others.length} ${others.length === 1 ? "bestand" : "bestanden"}` : ""]
+        .filter(Boolean).join(", ");
+      slot.innerHTML = `<div class="panel files-panel" id="files-drop">
+          <div class="panel-head"><h2>Foto's en bestanden</h2>
+            <span class="sub">${counted || "Nog niets"}</span>
+            <span class="spacer"></span>
+            ${mayEdit ? `<button class="btn ghost sm" id="files-add">${ICON.upload} Toevoegen</button>
+              <input type="file" id="files-input" multiple hidden />` : ""}</div>
+          ${pictures.length ? `<div class="gallery">${pictures.map((f) => `
+            <button type="button" class="thumb" data-view="${esc(f.id)}" title="${esc(f.name)}">
+              <img src="/api/attachments/${esc(f.id)}/thumb" alt="${esc(f.name)}" loading="lazy" /></button>`).join("")}</div>` : ""}
+          ${others.length ? `<div class="file-list">${others.map((f) => `<div class="file-row">
+              <span class="fr-ic">${ICON.file}</span>
+              <a class="fr-name" href="/api/attachments/${esc(f.id)}/file${f.mime === "application/pdf" ? "" : "?download=1"}"
+                 target="_blank" rel="noopener">${esc(f.name)}</a>
+              <span class="fr-meta">${kb(f.size)} · ${esc(f.created_by || "")} · ${new Date(f.created_at * 1000).toLocaleDateString("nl-NL")}</span>
+              <a class="lay-ib" href="/api/attachments/${esc(f.id)}/file?download=1" title="Downloaden">${ICON.download}</a>
+              ${mayEdit ? `<button type="button" class="lay-ib" data-del="${esc(f.id)}" title="Verwijderen">${ICON.trash}</button>` : ""}
+            </div>`).join("")}</div>` : ""}
+          ${mayEdit ? `<div class="files-hint">${files.length ? "Sleep er meer hierheen"
+              : "<b>Sleep foto's of bestanden hierheen</b>"}, plak een schermafbeelding met Ctrl+V,
+              of kies ze met Toevoegen.</div>` : ""}
+          <div class="files-busy hidden" id="files-busy"></div>
+        </div>`;
+      slot.querySelectorAll("[data-view]").forEach((b) => { b.onclick = () => openViewer(b.dataset.view); });
+      slot.querySelectorAll("[data-del]").forEach((b) => { b.onclick = () => removeFile(b.dataset.del); });
+      if (!mayEdit) return;
+      const input = slot.querySelector("#files-input");
+      slot.querySelector("#files-add").onclick = () => input.click();
+      input.onchange = () => { upload([...input.files]); input.value = ""; };
+      const zone = slot.querySelector("#files-drop");
+      zone.addEventListener("dragover", (ev) => {
+        if (![...(ev.dataTransfer.types || [])].includes("Files")) return;
+        ev.preventDefault();
+        zone.classList.add("dragover");
+      });
+      zone.addEventListener("dragleave", (ev) => {
+        if (!zone.contains(ev.relatedTarget)) zone.classList.remove("dragover");
+      });
+      zone.addEventListener("drop", (ev) => {
+        ev.preventDefault();
+        zone.classList.remove("dragover");
+        upload([...(ev.dataTransfer.files || [])]);
+      });
+      // A screenshot pasted anywhere on the page lands here.
+      pasteInto = (list) => upload(list);
+    }
+
+    async function upload(list) {
+      if (!list.length) return;
+      const busy = host.querySelector("#files-busy");
+      let done = 0;
+      for (const [n, file] of list.entries()) {
+        if (busy) {
+          busy.classList.remove("hidden");
+          busy.textContent = `Uploaden: ${file.name} (${n + 1} van ${list.length})…`;
+        }
+        try {
+          const res = await fetch(`/api/items/${item.id}/attachments?name=${encodeURIComponent(file.name)}`, {
+            method: "POST", headers: { "Content-Type": file.type || "application/octet-stream" }, body: file,
+          });
+          if (res.status === 413) {
+            const body = await res.json().catch(() => null);
+            // Refused by this server, it says how big a file may be; refused
+            // before it got here, it is the reverse proxy, with its own limit.
+            throw new Error(body && body.detail ? `${file.name}: ${body.detail}`
+              : `${file.name} is te groot voor de reverse proxy (bij nginx: client_max_body_size)`);
+          }
+          if (!res.ok) throw new Error(`${file.name}: ${((await res.json().catch(() => ({}))).detail) || res.status}`);
+          done++;
+        } catch (e) { toast(e.message); }
+      }
+      if (done) toast(done === 1 ? "Toegevoegd" : `${done} bestanden toegevoegd`);
+      await drawFiles();
+      await drawHistory();
+    }
+
+    async function removeFile(id) {
+      const f = files.find((x) => x.id === id);
+      if (!f || !window.confirm(`“${f.name}” verwijderen?`)) return;
+      try {
+        await api(`/api/attachments/${id}`, { method: "DELETE" });
+        toast("Verwijderd");
+        closeViewer();
+        await drawFiles();
+        await drawHistory();
+      } catch (e) { toast(e.message); }
+    }
+
+    // A photo, large, with the others an arrow key away.
+    function openViewer(id) {
+      const pictures = files.filter((f) => f.is_image);
+      let at = Math.max(0, pictures.findIndex((f) => f.id === id));
+      closeViewer();
+      const box = document.createElement("div");
+      box.id = "viewer";
+      box.className = "viewer";
+      const show = () => {
+        const f = pictures[at];
+        box.innerHTML = `<div class="vw-bar"><span class="vw-name">${esc(f.name)}</span>
+            <span class="vw-meta">${at + 1} van ${pictures.length}${f.width ? ` · ${f.width}×${f.height}` : ""}</span>
+            <span class="spacer"></span>
+            <a class="btn ghost sm" href="/api/attachments/${esc(f.id)}/file?download=1">${ICON.download} Downloaden</a>
+            ${mayEdit ? `<button class="btn ghost sm" id="vw-del">${ICON.trash} Verwijderen</button>` : ""}
+            <button class="btn ghost sm" id="vw-close" title="Sluiten (Esc)">Sluiten</button></div>
+          <div class="vw-stage">
+            ${pictures.length > 1 ? `<button class="vw-nav prev" id="vw-prev" title="Vorige (←)">${ICON.chevR}</button>` : ""}
+            <img src="/api/attachments/${esc(f.id)}/file" alt="${esc(f.name)}" />
+            ${pictures.length > 1 ? `<button class="vw-nav next" id="vw-next" title="Volgende (→)">${ICON.chevR}</button>` : ""}
+          </div>`;
+        box.querySelector("#vw-close").onclick = closeViewer;
+        const del = box.querySelector("#vw-del");
+        if (del) del.onclick = () => removeFile(f.id);
+        const step = (n) => { at = (at + n + pictures.length) % pictures.length; show(); };
+        const prev = box.querySelector("#vw-prev");
+        if (prev) prev.onclick = () => step(-1);
+        const next = box.querySelector("#vw-next");
+        if (next) next.onclick = () => step(1);
+        viewerKeys = (ev) => {
+          if (ev.key === "Escape") closeViewer();
+          if (ev.key === "ArrowLeft" && pictures.length > 1) step(-1);
+          if (ev.key === "ArrowRight" && pictures.length > 1) step(1);
+        };
+      };
+      box.addEventListener("click", (ev) => {
+        if (ev.target === box || ev.target.classList.contains("vw-stage")) closeViewer();
+      });
+      document.body.appendChild(box);
+      show();
     }
 
     /* The password itself. It is not a field: it never travels with the rest

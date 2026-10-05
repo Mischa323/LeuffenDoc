@@ -70,6 +70,9 @@ window.DocSettings = function (ctx) {
       })
       + field("EXPIRY_WARN_DAYS", "Waarschuwen vanaf", {
         hint: "Zoveel dagen voordat een garantie, contract of vervaldatum afloopt, staat het bovenaan het klantoverzicht.",
+      })
+      + field("DOC_ATTACH_MAX_MB", "Grootste bijlage (MB)", {
+        hint: "Foto's en bestanden bij een item worden in de database bewaard, dus ook in elke back-up. Staat er een reverse proxy voor, dan heeft die zijn eigen grens (bij nginx <code>client_max_body_size</code>) — zet die minstens even hoog.",
       }));
   }
 

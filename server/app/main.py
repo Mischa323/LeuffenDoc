@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import secrets
 import time
 import urllib.parse
@@ -25,8 +26,8 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, Redirec
                                Response)
 from fastapi.staticfiles import StaticFiles
 
-from . import (auth, backup, database, docpush, export, m365, pairing, rmm, schema, settings,
-               setup, strength, vault)
+from . import (attachments, auth, backup, database, docpush, export, m365, pairing, rmm, schema,
+               settings, setup, strength, vault)
 
 log = logging.getLogger("leuffendoc")
 
@@ -691,6 +692,100 @@ def remove_item(item_id: str, request: Request,
 # --------------------------------------------------------------------------- #
 # History
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# Photos and files on an item
+#
+# Added straight from the item's page -- no need to edit it first -- and shown
+# there: photos as a gallery, everything else as a list. Whoever may read the
+# item may open them; whoever may change it may add and remove them, and the
+# item's history says who did. Only a real picture (Pillow says so, not the
+# name) or a PDF is shown in the browser; anything else is downloaded.
+# --------------------------------------------------------------------------- #
+def _attachment_for(user: dict, attachment_id: str, need: str = "read") -> dict:
+    found = database.get_attachment(attachment_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="Dit bestand bestaat niet")
+    _item_for(user, found["item_id"], need)
+    return found
+
+
+@app.get("/api/items/{item_id}/attachments")
+def list_attachments(item_id: str, user: dict = Depends(auth.current_user)):
+    _item_for(user, item_id)
+    return database.list_attachments(item_id)
+
+
+@app.post("/api/items/{item_id}/attachments")
+async def add_attachment(item_id: str, request: Request, name: str = "",
+                         user: dict = Depends(auth.current_user)):
+    item, org = _item_for(user, item_id, "edit")
+    limit = int(settings.get("DOC_ATTACH_MAX_MB")) * 1024 * 1024
+    too_big = HTTPException(status_code=413, detail=f"Een bestand mag hier hoogstens "
+                                                    f"{settings.get('DOC_ATTACH_MAX_MB')} MB zijn")
+    if int(request.headers.get("content-length") or 0) > limit:
+        raise too_big
+    data = await request.body()
+    if not data:
+        raise HTTPException(status_code=400, detail="Het bestand is leeg")
+    if len(data) > limit:
+        raise too_big
+    name = attachments.clean_name(name)
+    seen = attachments.inspect(data, name)
+    added = database.add_attachment(item_id, name, seen["mime"], data, by=user["email"],
+                                    is_image=seen["is_image"], width=seen["width"],
+                                    height=seen["height"], thumb=seen["thumb"])
+    database.record(item_id, "updated",
+                    [{"key": "bijlage", "label": "Foto" if seen["is_image"] else "Bestand",
+                      "from": "", "to": name}], by=user["email"])
+    database.audit("attachment.add", user_email=user["email"], org_id=org["id"],
+                   target=item["name"], detail=f"{name} ({len(data) // 1024} kB)",
+                   ip=auth.client_ip(request))
+    return added
+
+
+def _disposition(kind: str, name: str) -> str:
+    plain = re.sub(r'[^A-Za-z0-9._ -]', "_", name)
+    return f"{kind}; filename=\"{plain}\"; filename*=UTF-8''{urllib.parse.quote(name)}"
+
+
+@app.get("/api/attachments/{attachment_id}/file")
+def attachment_file(attachment_id: str, download: bool = False,
+                    user: dict = Depends(auth.current_user)):
+    found = _attachment_for(user, attachment_id)
+    shown = not download and (found["is_image"] or found["mime"] == "application/pdf")
+    headers = {"Content-Disposition": _disposition("inline" if shown else "attachment", found["name"]),
+               "X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=3600"}
+    if found["is_image"]:
+        headers["Content-Security-Policy"] = "default-src 'none'; img-src 'self'; sandbox"
+    return Response(database.attachment_data(attachment_id),
+                    media_type=found["mime"] if shown else "application/octet-stream",
+                    headers=headers)
+
+
+@app.get("/api/attachments/{attachment_id}/thumb")
+def attachment_thumb(attachment_id: str, user: dict = Depends(auth.current_user)):
+    _attachment_for(user, attachment_id)
+    small = database.attachment_data(attachment_id, thumb=True)
+    if not small:
+        raise HTTPException(status_code=404, detail="Geen voorbeeld")
+    return Response(small, media_type="image/jpeg",
+                    headers={"Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff"})
+
+
+@app.delete("/api/attachments/{attachment_id}")
+def remove_attachment(attachment_id: str, request: Request,
+                      user: dict = Depends(auth.current_user)):
+    found = _attachment_for(user, attachment_id, "edit")
+    item = database.get_item(found["item_id"])
+    database.delete_attachment(attachment_id)
+    database.record(found["item_id"], "updated",
+                    [{"key": "bijlage", "label": "Foto" if found["is_image"] else "Bestand",
+                      "from": found["name"], "to": ""}], by=user["email"])
+    database.audit("attachment.delete", user_email=user["email"], org_id=item["org_id"],
+                   target=item["name"], detail=found["name"], ip=auth.client_ip(request))
+    return {"status": "ok"}
+
+
 @app.get("/api/items/{item_id}/revisions")
 def item_revisions(item_id: str, user: dict = Depends(auth.current_user)):
     _item_for(user, item_id)

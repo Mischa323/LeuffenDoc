@@ -7,3 +7,4 @@ itsdangerous==2.2.0
 cryptography==44.0.0
 msal==1.31.1
 python-multipart==0.0.20
+Pillow==11.1.0

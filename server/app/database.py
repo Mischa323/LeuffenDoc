@@ -259,6 +259,27 @@ CREATE TABLE IF NOT EXISTS item_types (
     updated_by   TEXT
 );
 
+-- Photos and files on an item: a picture of the rack, the manual, an exported
+-- configuration. Kept in the database itself, so every back-up -- the encrypted
+-- copy included -- holds them, and putting one back puts them back too. A list
+-- never reads `data`; a photo has a small `thumb` for the gallery.
+CREATE TABLE IF NOT EXISTS attachments (
+    id          TEXT PRIMARY KEY,
+    item_id     TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    mime        TEXT NOT NULL,
+    size        INTEGER NOT NULL,
+    is_image    INTEGER NOT NULL DEFAULT 0,
+    width       INTEGER,
+    height      INTEGER,
+    data        BLOB NOT NULL,
+    thumb       BLOB,
+    created_at  REAL NOT NULL,
+    created_by  TEXT,
+    FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_attachments_item ON attachments(item_id, created_at);
+
 -- How a built-in kind is laid out here: its blocks, the order of its fields,
 -- fields renamed or hidden, and fields added to it (see schema.arrange). No row
 -- means the layout from the code.
@@ -1067,6 +1088,54 @@ def save_item_type(type_id: str, spec: dict, by: str | None, creating: bool) -> 
                  json.dumps(spec.get("columns") or []), json.dumps(spec.get("fields") or []),
                  json.dumps(spec.get("layout") or {}), now, by, type_id))
     return get_item_type(type_id)
+
+
+# --------------------------------------------------------------------------- #
+# Photos and files on an item
+# --------------------------------------------------------------------------- #
+_ATTACHMENT_META = "id, item_id, name, mime, size, is_image, width, height, created_at, created_by"
+
+
+def _attachment_out(r: dict) -> dict:
+    r = dict(r)
+    r["is_image"] = bool(r.get("is_image"))
+    return r
+
+
+def add_attachment(item_id: str, name: str, mime: str, data: bytes, by: str | None,
+                   is_image: bool = False, width: int | None = None, height: int | None = None,
+                   thumb: bytes | None = None) -> dict:
+    attachment_id = uuid.uuid4().hex[:16]
+    with write() as conn:
+        conn.execute("INSERT INTO attachments (id, item_id, name, mime, size, is_image, width, "
+                     "height, data, thumb, created_at, created_by) "
+                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     (attachment_id, item_id, name, mime, len(data), int(is_image), width, height,
+                      sqlite3.Binary(data), sqlite3.Binary(thumb) if thumb else None,
+                      time.time(), by))
+    return get_attachment(attachment_id)
+
+
+def list_attachments(item_id: str) -> list:
+    return [_attachment_out(r) for r in rows(
+        f"SELECT {_ATTACHMENT_META} FROM attachments WHERE item_id=? ORDER BY created_at, name",
+        (item_id,))]
+
+
+def get_attachment(attachment_id: str) -> dict | None:
+    r = row(f"SELECT {_ATTACHMENT_META} FROM attachments WHERE id=?", (attachment_id,))
+    return _attachment_out(r) if r else None
+
+
+def attachment_data(attachment_id: str, thumb: bool = False) -> bytes | None:
+    r = row(f"SELECT {'thumb' if thumb else 'data'} AS b FROM attachments WHERE id=?",
+            (attachment_id,))
+    return bytes(r["b"]) if r and r["b"] is not None else None
+
+
+def delete_attachment(attachment_id: str) -> None:
+    with write() as conn:
+        conn.execute("DELETE FROM attachments WHERE id=?", (attachment_id,))
 
 
 def kind_layouts() -> dict:

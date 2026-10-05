@@ -143,6 +143,23 @@ def gather(org: dict, hidden: set, with_passwords: bool) -> tuple[dict, list]:
             secrets.append(entry)
         if secrets:
             record["passwords"] = secrets
+        # Photos and files go into the zip, each item in a folder of its own;
+        # the page to read refers to them, so it shows the photos offline too.
+        files = database.list_attachments(item["id"])
+        if files:
+            where = f"bijlagen/{_file_slug(item['name'])}-{item['id'][:6]}"
+            taken: set = set()
+            record["attachments"] = []
+            for f in files:
+                name, n = f["name"], 2
+                while name in taken:
+                    stem, dot, ext = f["name"].rpartition(".")
+                    name = f"{stem}-{n}.{ext}" if dot else f"{f['name']}-{n}"
+                    n += 1
+                taken.add(name)
+                record["attachments"].append({"id": f["id"], "name": f["name"], "mime": f["mime"],
+                                              "size": f["size"], "is_image": f["is_image"],
+                                              "path": f"{where}/{name}"})
         out.append(record)
     return {"customer": {"id": org["id"], "name": org["name"], "rmm_org_id": org.get("rmm_org_id")},
             "exported_at": time.time(), "with_passwords": with_passwords, "items": out}, read
@@ -180,6 +197,7 @@ table { border-collapse: collapse; width: 100%; font-size: 13px; } td, th { text
   border-bottom: 1px solid #eef0f4; } th { color: #5b6475; font-weight: 600; }
 code { font: 13px ui-monospace, Consolas, monospace; background: #f1f3f7; padding: 1px 5px; border-radius: 4px; }
 .body { white-space: pre-wrap; font-size: 13.5px; border-left: 3px solid #dde1e8; padding-left: 12px; margin-top: 8px; }
+.pics { display: flex; flex-wrap: wrap; gap: 8px; } .pics img { height: 140px; border-radius: 6px; border: 1px solid #dde1e8; }
 @media print { body { background: #fff; } main { padding: 0; } .item { border-color: #bbb; } nav { display: none; } }
 """
 
@@ -241,6 +259,16 @@ def to_html(data: dict, by: str) -> str:
                              ", ".join(e(r["name"]) for r in item["related"]) + "</div>")
             for f in body:
                 parts.append(f"<div class='body'>{e(f['value'])}</div>")
+            files = item.get("attachments") or []
+            pictures = [f for f in files if f["is_image"]]
+            others = [f for f in files if not f["is_image"]]
+            if pictures:
+                parts.append("<div class='sub'>Foto's</div><div class='pics'>" + "".join(
+                    f"<a href='{e(f['path'])}'><img src='{e(f['path'])}' alt='{e(f['name'])}'></a>"
+                    for f in pictures) + "</div>")
+            if others:
+                parts.append("<div class='sub'>Bestanden</div><div>" + "<br>".join(
+                    f"<a href='{e(f['path'])}'>{e(f['name'])}</a>" for f in others) + "</div>")
             parts.append("</section>")
     parts.append("</main></body></html>")
     return "".join(parts)
@@ -279,4 +307,9 @@ def build(org: dict, hidden: set, with_passwords: bool, by: str) -> tuple[str, b
         z.writestr(f"{folder}/data.json", json.dumps(data, ensure_ascii=False, indent=2, default=str))
         for path, content in to_csv(data).items():
             z.writestr(f"{folder}/{path}", content)
+        for item in data["items"]:
+            for f in item.get("attachments") or []:
+                content = database.attachment_data(f["id"])
+                if content is not None:
+                    z.writestr(f"{folder}/{f['path']}", content)
     return f"{folder}.zip", buf.getvalue(), read

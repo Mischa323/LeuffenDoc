@@ -96,10 +96,41 @@
     .list-bar .chips { flex: 1; margin-bottom: 0; }
     .list-bar > .btn { margin-left: auto; flex: none; }
     .list-bar > .btn .count { margin-left: 2px; font-weight: 700; opacity: .7; }
+    /* ---- photos and files on an item ---- */
+    .files-panel.dragover { outline: 2px dashed var(--accent); outline-offset: -2px; }
+    .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px;
+               padding: 12px 14px; }
+    .thumb { padding: 0; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden;
+             background: var(--surface-2); cursor: zoom-in; aspect-ratio: 4 / 3; }
+    .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .thumb:hover { border-color: var(--accent); }
+    .file-list { padding: 4px 0; }
+    .file-row { display: flex; align-items: center; gap: 10px; padding: 7px 14px 7px 18px;
+                border-top: 1px solid var(--border-soft); font-size: 13px; }
+    .fr-ic { display: inline-flex; color: var(--text-faint); }
+    .fr-ic svg { width: 15px; height: 15px; }
+    .fr-name { color: var(--accent); font-weight: 550; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+               white-space: nowrap; text-decoration: none; }
+    .fr-meta { color: var(--text-faint); font-size: 12px; margin-left: auto; white-space: nowrap; }
+    .files-hint { padding: 10px 18px 14px; font-size: 12.5px; color: var(--text-faint); }
+    .files-busy { padding: 0 18px 12px; font-size: 12.5px; color: var(--accent); }
+    .viewer { position: fixed; inset: 0; z-index: 200; background: rgba(5, 8, 14, .92);
+              display: flex; flex-direction: column; }
+    .vw-bar { display: flex; align-items: center; gap: 10px; padding: 12px 18px; color: #e8ecf3; }
+    .vw-name { font-weight: 600; }
+    .vw-meta { color: #9aa3b5; font-size: 12.5px; }
+    .vw-stage { flex: 1; display: flex; align-items: center; justify-content: center; gap: 14px;
+                padding: 0 18px 18px; min-height: 0; }
+    .vw-stage img { max-width: calc(100% - 120px); max-height: 100%; object-fit: contain; border-radius: 6px; }
+    .vw-nav { width: 44px; height: 44px; border-radius: 50%; border: 0; cursor: pointer; flex: none;
+              background: rgba(255, 255, 255, .12); color: #fff; display: grid; place-items: center; }
+    .vw-nav:hover { background: rgba(255, 255, 255, .22); }
+    .vw-nav svg { width: 20px; height: 20px; }
+    .vw-nav.prev svg { transform: rotate(180deg); }
     /* Scrolled to (a copy being made): clear of the bar that stays at the top. */
     #new-item { scroll-margin-top: 84px; }
     /* The sections under an item's blocks, spaced like the blocks themselves. */
-    #secret > *, #access > *, #adapters > *, #ports > *, #passwords > *,
+    #files > *, #secret > *, #access > *, #adapters > *, #ports > *, #passwords > *,
     #referred > *, #related > *, #history > * { margin-bottom: 14px; }
 
     /* ---- related ---- */

@@ -32,6 +32,7 @@ SPEC: dict[str, dict] = {
     "DOC_PUBLIC_URL": {"group": "algemeen", "type": "url", "default": ""},
     "EXPIRY_WARN_DAYS": {"group": "algemeen", "type": "int", "default": 60,
                          "min": 1, "max": 365},
+    "DOC_ATTACH_MAX_MB": {"group": "algemeen", "type": "int", "default": 25, "min": 1, "max": 200},
 
     # -- Reaching the server: the reverse proxy, cookies, who administers it
     "DOC_TRUST_PROXY": {"group": "toegang", "type": "bool", "default": False},
