@@ -25,7 +25,7 @@ import time
 import unicodedata
 import zipfile
 
-from . import database, schema, vault
+from . import database, rack, schema, vault
 
 
 # --------------------------------------------------------------------------- #
@@ -143,6 +143,9 @@ def gather(org: dict, hidden: set, with_passwords: bool) -> tuple[dict, list]:
             secrets.append(entry)
         if secrets:
             record["passwords"] = secrets
+        if item["kind"] == "rack":
+            record["rack"] = rack.describe(database.rack_slots(item["id"]),
+                                           {i["id"]: i for i in items})
         # Photos and files go into the zip, each item in a folder of its own;
         # the page to read refers to them, so it shows the photos offline too.
         files = database.list_attachments(item["id"])
@@ -259,6 +262,10 @@ def to_html(data: dict, by: str) -> str:
                              ", ".join(e(r["name"]) for r in item["related"]) + "</div>")
             for f in body:
                 parts.append(f"<div class='body'>{e(f['value'])}</div>")
+            if item.get("rack"):
+                parts.append("<div class='sub'>Indeling</div><table><tr><th>Hoogte</th><th>Wat</th></tr>"
+                             + "".join(f"<tr><td>{e(r['where'])}</td><td>{e(r['what'])}</td></tr>"
+                                       for r in item["rack"]) + "</table>")
             files = item.get("attachments") or []
             pictures = [f for f in files if f["is_image"]]
             others = [f for f in files if not f["is_image"]]

@@ -225,6 +225,33 @@ LOCATION = {
     ],
 }
 
+# A patch cabinet: where it stands and how tall it is. What hangs in it, and at
+# which height, is drawn on its page (see rack.py) -- the switches and servers
+# documented here, and the patch panels, shelves and power strips between them.
+RACK = {
+    "label": "Patchkast",
+    "plural": "Patchkasten",
+    "icon": "rack",
+    "family": "onderdeel",
+    "sub": "Kasten en wat erin hangt, zoals het er echt uitziet",
+    "backref": "Wat hiernaar verwijst",
+    "columns": ["location", "placement", "units"],
+    "groups": [
+        {"key": "wat", "label": "Waar en hoe groot", "fields": [
+            _f("location", "Locatie", "ref", ref="location", icon="building"),
+            _f("placement", "Waar hij staat",
+               hint="De ruimte: de serverruimte in de kelder, de meterkast, de werkplaats."),
+            _f("units", "Hoogte (U)", "number", icon="rack",
+               hint="Hoeveel units erin passen: 42, 24, 12, 9 … Leeg is 42."),
+            _f("depth", "Diepte", hint="Bijvoorbeeld 600 of 800 mm — past die server erin?"),
+        ]},
+        {"key": "over", "label": "Over", "fields": [
+            _f("access", "Sleutel en toegang", hint="Waar de sleutel ligt, wie hem heeft."),
+            _f("notes", "Notities", "textarea"),
+        ]},
+    ],
+}
+
 CONTACT = {
     "label": "Contactpersoon",
     "plural": "Contactpersonen",
@@ -355,6 +382,7 @@ BUILT_IN: dict[str, dict] = {
     "network": NETWORK,
     "printer": PRINTER,
     "internet": INTERNET,
+    "rack": RACK,
     "location": LOCATION,
     "contact": CONTACT,
     "password": PASSWORD,

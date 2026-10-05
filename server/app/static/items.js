@@ -12,6 +12,7 @@ window.DocItems = function (ctx) {
   "use strict";
 
   const { api, esc, go, toast } = ctx;
+  const Rack = window.DocRack ? window.DocRack({ api, esc, go, toast }) : null;
   let KINDS = null;
   // Set from Instellingen: how passwords are made, how long one stays on
   // screen, and when a date starts to warn.
@@ -587,7 +588,7 @@ window.DocItems = function (ctx) {
         <div class="ih-txt">
           <h3>${esc(item.name)}${item.archived ? ' <span class="tag">gearchiveerd</span>' : ""}
             ${item.restricted ? ` <span class="tag warn">${ICON.lock} afgeschermd</span>` : ""}</h3>
-          <small>${esc(spec.label)} · ${source}</small>
+          <small>${esc(spec.label)} · ${source}<span id="in-rack"></span></small>
         </div>
         <div class="ih-act" id="item-actions"></div>
       </div>`;
@@ -645,6 +646,7 @@ window.DocItems = function (ctx) {
              <div class="form-foot"><button class="btn ghost" id="edit-cancel">Annuleren</button>
                <button class="btn" id="edit-save">${ICON.save} Opslaan</button></div>`
                    : readBlocks()
+                     + (item.kind === "rack" ? `<div id="rack-view"></div>` : "")
                      + `<div id="files"></div>`
                      + `<div id="secret"></div><div id="access"></div>`
                      + `<div id="adapters"></div><div id="ports"></div>`
@@ -666,6 +668,10 @@ window.DocItems = function (ctx) {
         host.querySelectorAll("[data-goto]").forEach((a) => {
           a.onclick = () => go(`#/klant/${org.id}/item/${a.dataset.goto}`);
         });
+        if (Rack && item.kind === "rack") {
+          Rack.view(host.querySelector("#rack-view"), { org, item, mayEdit, all, kinds: KINDS });
+        }
+        if (Rack && item.kind !== "rack") Rack.whereHangs(host.querySelector("#in-rack"), org, item.id);
         drawFiles();
         drawSecret();
         drawAccess();

@@ -30,6 +30,7 @@ const ICON = {
   gpu: I('<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="8" cy="12" r="2.5"/><circle cx="15" cy="12" r="2.5"/><path d="M2 18v2m4-2v2"/>'),
   thermo: I('<path d="M14 14.76V5a2 2 0 0 0-4 0v9.76a4 4 0 1 0 4 0Z"/>'),
   server: I('<rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/>'),
+  rack: I('<rect x="5" y="2" width="14" height="20" rx="1.5"/><path d="M8 6.5h8M8 10.5h8M8 14.5h8M8 18.5h3"/>'),
   nas: I('<rect x="6" y="3" width="12" height="18" rx="2"/><path d="M9 7h6M9 11h6"/><path d="M15 16.5h.01"/>'),
   cloud: I('<path d="M17.5 19a4.5 4.5 0 0 0 .5-8.97A6 6 0 0 0 6.3 9.5 4 4 0 0 0 7 19Z"/>'),
   check: I('<path d="M20 6 9 17l-5-5"/>'),

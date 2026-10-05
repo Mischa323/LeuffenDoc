@@ -26,8 +26,8 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, Redirec
                                Response)
 from fastapi.staticfiles import StaticFiles
 
-from . import (attachments, auth, backup, database, docpush, export, m365, pairing, rmm, schema,
-               settings, setup, strength, vault)
+from . import (attachments, auth, backup, database, docpush, export, m365, pairing, rack, rmm,
+               schema, settings, setup, strength, vault)
 
 log = logging.getLogger("leuffendoc")
 
@@ -784,6 +784,56 @@ def remove_attachment(attachment_id: str, request: Request,
     database.audit("attachment.delete", user_email=user["email"], org_id=item["org_id"],
                    target=item["name"], detail=found["name"], ip=auth.client_ip(request))
     return {"status": "ok"}
+
+
+# --------------------------------------------------------------------------- #
+# Patch cabinets (see rack.py)
+# --------------------------------------------------------------------------- #
+def _org_items(org_id: str) -> dict:
+    return {i["id"]: i for i in database.list_items(org_id, include_archived=True)}
+
+
+@app.get("/api/items/{item_id}/rack")
+def get_rack(item_id: str, user: dict = Depends(auth.current_user)):
+    item, _ = _item_for(user, item_id)
+    if item["kind"] != "rack":
+        raise HTTPException(status_code=400, detail="Dit is geen patchkast")
+    return rack.view(item, _org_items(item["org_id"]), _hidden(user))
+
+
+@app.put("/api/items/{item_id}/rack")
+async def save_rack(item_id: str, request: Request, user: dict = Depends(auth.current_user)):
+    item, _ = _item_for(user, item_id, "edit")
+    if item["kind"] != "rack":
+        raise HTTPException(status_code=400, detail="Dit is geen patchkast")
+    body = await request.json()
+    items = _org_items(item["org_id"])
+    hidden = _hidden(user)
+    before = database.rack_slots(item_id)
+    # Something shut off to this person stays where it is: they cannot see it,
+    # so the page could not have sent it back -- and may not put it anywhere.
+    kept = [s for s in before if s.get("kind") == "item" and s.get("item") in hidden]
+    sent = [s for s in (body.get("slots") or []) if not (s.get("kind") == "item" and s.get("item") in hidden)]
+    try:
+        slots = rack.clean(item, sent + kept, items)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    database.save_rack_slots(item_id, slots, by=user["email"])
+    shape = lambda ss: sorted((s.get("kind"), s.get("item"), s.get("at"), s.get("height")) for s in ss)  # noqa: E731
+    if shape(before) != shape(slots):
+        database.record(item_id, "updated", [{"key": "kast", "label": "Indeling",
+                                              "from": f"{len(before)} onderdelen" if before else "",
+                                              "to": f"{len(slots)} onderdelen"}], by=user["email"])
+    return rack.view(item, items, hidden)
+
+
+@app.get("/api/items/{item_id}/racks")
+def racks_of(item_id: str, user: dict = Depends(auth.current_user)):
+    """The cabinets this hangs in, for its page."""
+    item, _ = _item_for(user, item_id)
+    hidden = _hidden(user)
+    return [r for r in database.racks_holding(item_id)
+            if r["org_id"] == item["org_id"] and r["rack_id"] not in hidden]
 
 
 @app.get("/api/items/{item_id}/revisions")

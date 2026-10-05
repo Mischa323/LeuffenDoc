@@ -127,6 +127,91 @@
     .vw-nav:hover { background: rgba(255, 255, 255, .22); }
     .vw-nav svg { width: 20px; height: 20px; }
     .vw-nav.prev svg { transform: rotate(180deg); }
+    /* ---- a patch cabinet, as it stands (rack.js) ----
+       Cabinets are black metal in either theme, so their colours are fixed. */
+    .rk-wrap { display: flex; gap: 22px; align-items: flex-start; padding: 18px; flex-wrap: wrap; }
+    .rk-cabinet { flex: none; }
+    .rk-top { height: 14px; background: linear-gradient(#3a3f48, #24272d); border-radius: 6px 6px 0 0;
+              border: 1px solid #111; }
+    .rk-frame { display: flex; background: #15171b; border: 1px solid #0b0c0e; border-top: 0; border-bottom: 0;
+                padding: 4px 0; }
+    .rk-rail { position: relative; width: 26px; background: repeating-linear-gradient(#2c3037 0 1px, #1f2227 1px 40px); }
+    .rk-rail span { position: absolute; left: 0; right: 0; height: 40px; display: grid; place-items: center;
+                    font: 600 10px/1 var(--font-mono, monospace); color: #6d7584; }
+    .rk-bay { position: relative; background: repeating-linear-gradient(#101215 0 39px, #1b1e23 39px 40px); }
+    .rk-feet { display: flex; justify-content: space-between; padding: 0 10px; }
+    .rk-feet i { width: 34px; height: 8px; background: #2a2e35; border-radius: 0 0 4px 4px; }
+    .rk-slot { position: absolute; left: -26px; right: -26px; display: flex; cursor: pointer; z-index: 1; }
+    .rk-slot:hover { filter: brightness(1.12); }
+    .rk-slot.sel { outline: 2px solid var(--accent); outline-offset: 1px; z-index: 2; }
+    .rk-ear { width: 26px; flex: none; background: linear-gradient(90deg, #8b9099, #b4b9c1 50%, #8b9099);
+              display: flex; flex-direction: column; justify-content: space-around; align-items: center;
+              border-top: 1px solid #c9cdd3; border-bottom: 1px solid #5d626b; }
+    .rk-ear i { width: 8px; height: 8px; border-radius: 50%; background: #3a3e45; box-shadow: inset 0 1px 1px #000; }
+    .rk-ear.l { order: 0; } .rk-ear.r { order: 2; }
+    .rk-body, .rk-plate { order: 1; flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 3px 8px;
+                          color: #dfe3ea; border-top: 1px solid #4a505a; border-bottom: 1px solid #0c0d10;
+                          background: linear-gradient(#3a3f47, #2b2f36); overflow: hidden; }
+    .rk-name { font: 600 11px/1.15 var(--font, sans-serif); white-space: nowrap; overflow: hidden;
+               text-overflow: ellipsis; max-width: 110px; flex: none; }
+    .rk-role { font-size: 9.5px; color: #98a0ad; flex: none; }
+    .rk-leds { display: flex; gap: 3px; flex: none; }
+    .rk-leds i { width: 5px; height: 5px; border-radius: 50%; background: #3f6d3f; }
+    .rk-leds i.pwr { background: #44d16a; box-shadow: 0 0 5px #44d16a; }
+    .rk-ports { flex: 1; display: grid; gap: 2px; margin-left: auto; max-width: 300px; height: calc(100% - 4px); }
+    .rk-port { background: #0d0f12; border: 1px solid #50565f; border-radius: 1px; min-height: 0; position: relative; }
+    .rk-port::after { content: ""; position: absolute; left: 30%; right: 30%; bottom: 0; height: 30%; background: #2a2e34; }
+    .rk-port.on { border-color: #36c262; box-shadow: inset 0 0 0 1px #1d6b35, 0 0 4px rgba(54, 194, 98, .55); }
+    .rk-port.on::after { background: #36c262; }
+    .rk-port.jack { border-radius: 2px; background: #0a0b0d; border-color: #3d424a; }
+    .rk-body.rk-sw { background: linear-gradient(#2f4058, #22324a); }
+    .rk-body.rk-patch { background: linear-gradient(#202227, #16181b); }
+    .rk-body.rk-srv { background: linear-gradient(#3c4149, #2c3037); }
+    .rk-bays { flex: 1; display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; height: calc(100% - 6px);
+               max-width: 220px; margin-left: auto; }
+    .rk-bays.h1 { grid-template-columns: repeat(8, 1fr); }
+    .rk-bays i { background: linear-gradient(#24272c, #1a1c20); border: 1px solid #555b64; border-radius: 1px; }
+    .rk-body.rk-app { background: linear-gradient(#4a3236, #36252a); }
+    .rk-body.rk-pdu { background: linear-gradient(#26292e, #1c1e22); }
+    .rk-sockets { flex: 1; display: grid; grid-template-columns: repeat(8, 1fr); gap: 5px; max-width: 260px;
+                  margin-left: auto; height: 70%; }
+    .rk-sockets i { background: #0c0d10; border: 1px solid #4b5059; border-radius: 3px; }
+    .rk-body.rk-ups { background: linear-gradient(#2a2d33, #1d1f23); }
+    .rk-lcd { margin-left: auto; padding: 2px 7px; background: #1d3a4a; color: #8fd3ff; font: 600 9px/1.2 monospace;
+              border: 1px solid #0d1c25; border-radius: 2px; }
+    .rk-plate { background: linear-gradient(#262a30, #1d2025); justify-content: center; }
+    .rk-plate.rk-blank { background: repeating-linear-gradient(90deg, #22252a 0 6px, #1e2125 6px 12px); }
+    .rk-plate.rk-cable { gap: 14px; background: #17191d; }
+    .rk-plate.rk-cable i { width: 22px; height: 70%; border: 3px solid #3d424b; border-bottom: 0; border-radius: 10px 10px 0 0; }
+    .rk-plate.rk-shelf { align-items: flex-end; background: linear-gradient(transparent 70%, #4b5059 70%, #33373e); }
+    .rk-plate.rk-gone { background: repeating-linear-gradient(45deg, #2c2224 0 8px, #241c1e 8px 16px); }
+    .rk-drop { position: absolute; left: -26px; right: -26px; border: 2px dashed #36c262; background: rgba(54, 194, 98, .15);
+               z-index: 3; pointer-events: none; }
+    .rk-drop.bad { border-color: #e5484d; background: rgba(229, 72, 77, .15); }
+    .rk-side { flex: 1; min-width: 260px; max-width: 420px; display: flex; flex-direction: column; gap: 14px; }
+    .rk-side-sec h3 { margin: 0 0 8px; font-size: 12px; color: var(--text-dim); text-transform: uppercase;
+                      letter-spacing: .05em; }
+    .rk-side-sec .inp { margin-bottom: 8px; height: 32px; }
+    .rk-picks { display: flex; flex-direction: column; gap: 5px; max-height: 360px; overflow: auto; }
+    .rk-pick { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border: 1px solid var(--border);
+               border-radius: var(--r-sm); background: var(--surface-2); cursor: grab; font-size: 13px; }
+    .rk-pick:hover { border-color: var(--accent); }
+    .rk-pick .muted { margin-left: auto; font-size: 11.5px; white-space: nowrap; }
+    .rk-pick-ic { display: inline-flex; color: var(--text-dim); }
+    .rk-pick-ic svg { width: 15px; height: 15px; }
+    .rk-pick-name { font-weight: 550; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rk-mini { width: 30px; height: 10px; border-radius: 2px; background: #2b2f36; border: 1px solid #50565f; flex: none; }
+    .rk-mini.rk-patch { background: repeating-linear-gradient(90deg, #0d0f12 0 3px, #50565f 3px 4px); }
+    .rk-mini.rk-ups { height: 16px; } .rk-mini.rk-shelf { height: 16px; border-top-color: transparent; }
+    .rk-none { padding: 8px 2px; font-size: 12.5px; }
+    .rk-help { font-size: 12.5px; color: var(--text-faint); line-height: 1.5; }
+    .rk-insp { border: 1px solid var(--accent); border-radius: var(--r-md); padding: 12px 12px 4px; }
+    .rk-insp-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+    .rk-insp-head .muted { margin-left: auto; font-family: var(--font-mono, monospace); font-size: 12px; }
+    .rk-insp-acts { display: flex; gap: 6px; flex-wrap: wrap; padding-bottom: 8px; }
+    .rk-where { margin-left: 8px; cursor: pointer; gap: 4px; text-transform: none; letter-spacing: 0; }
+    .rk-where svg { width: 11px; height: 11px; }
+    #rack-view > * { margin-bottom: 14px; }
     /* Scrolled to (a copy being made): clear of the bar that stays at the top. */
     #new-item { scroll-margin-top: 84px; }
     /* The sections under an item's blocks, spaced like the blocks themselves. */
@@ -531,6 +616,7 @@
   </div>
   <script src="/icons.js"></script>
   <script src="/password.js"></script>
+  <script src="/rack.js"></script>
   <script src="/items.js"></script>
   <script src="/types.js"></script>
   <script src="/settings.js"></script>

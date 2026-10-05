@@ -280,6 +280,15 @@ CREATE TABLE IF NOT EXISTS attachments (
 );
 CREATE INDEX IF NOT EXISTS idx_attachments_item ON attachments(item_id, created_at);
 
+-- What hangs in a patch cabinet, and where: one list per cabinet (see rack.py).
+CREATE TABLE IF NOT EXISTS rack_layouts (
+    rack_id     TEXT PRIMARY KEY,
+    slots_json  TEXT NOT NULL DEFAULT '[]',
+    updated_at  REAL NOT NULL,
+    updated_by  TEXT,
+    FOREIGN KEY (rack_id) REFERENCES items(id) ON DELETE CASCADE
+);
+
 -- How a built-in kind is laid out here: its blocks, the order of its fields,
 -- fields renamed or hidden, and fields added to it (see schema.arrange). No row
 -- means the layout from the code.
@@ -1136,6 +1145,32 @@ def attachment_data(attachment_id: str, thumb: bool = False) -> bytes | None:
 def delete_attachment(attachment_id: str) -> None:
     with write() as conn:
         conn.execute("DELETE FROM attachments WHERE id=?", (attachment_id,))
+
+
+def rack_slots(rack_id: str) -> list:
+    r = row("SELECT slots_json FROM rack_layouts WHERE rack_id=?", (rack_id,))
+    return json.loads(r["slots_json"]) if r else []
+
+
+def save_rack_slots(rack_id: str, slots: list, by: str | None) -> None:
+    with write() as conn:
+        conn.execute("INSERT INTO rack_layouts (rack_id, slots_json, updated_at, updated_by) "
+                     "VALUES (?, ?, ?, ?) ON CONFLICT(rack_id) DO UPDATE SET "
+                     "slots_json=excluded.slots_json, updated_at=excluded.updated_at, "
+                     "updated_by=excluded.updated_by",
+                     (rack_id, json.dumps(slots), time.time(), by))
+
+
+def racks_holding(item_id: str) -> list:
+    """The cabinets something hangs in, and where."""
+    out = []
+    for r in rows("SELECT l.rack_id, i.name, i.org_id, j.value AS slot FROM rack_layouts l "
+                  "JOIN items i ON i.id = l.rack_id, json_each(l.slots_json) j "
+                  "WHERE json_extract(j.value, '$.item') = ?", (item_id,)):
+        slot = json.loads(r["slot"])
+        out.append({"rack_id": r["rack_id"], "rack_name": r["name"], "org_id": r["org_id"],
+                    "at": slot.get("at"), "height": slot.get("height")})
+    return out
 
 
 def kind_layouts() -> dict:
