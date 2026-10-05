@@ -194,8 +194,12 @@
     }
     if (parts[0] === "klant" && parts[1]) {
       state.org = state.orgs.find((o) => o.id === parts[1]) || null;
-      // `.../item/<id>` opens one thing; everything else is a section.
-      if (state.org && parts[2] === "item" && parts[3]) {
+      // `.../item/<id>` opens one thing; `.../zoeken` searches this customer;
+      // everything else is a section.
+      if (state.org && parts[2] === "zoeken") {
+        state.item = null;
+        state.tab = "zoeken";
+      } else if (state.org && parts[2] === "item" && parts[3]) {
         state.item = parts[3];
         state.tab = "overzicht";
       } else {
@@ -565,6 +569,7 @@
 
   // ---- render ----
   async function render() {
+    searchScope();
     if (state.tab === "zoeken") { await searchView(); return; }
     if (state.tab === "instellingen") { await settingsView(); return; }
     const tab = tabsHere().find((t) => t.id === state.tab) || tabsHere()[0];
@@ -592,9 +597,10 @@
         if (section) {
           state.tab = section.id;
           renderNav();
-          $("page-actions").innerHTML =
-            `<button class="btn ghost sm" id="back-list">${ICON.chevR} Terug naar ${esc(section.label.toLowerCase())}</button>`;
-          $("back-list").onclick = () => go(`#/klant/${state.org.id}/${section.id}`);
+          // An archived item came from the archive, and goes back there.
+          $("page-actions").innerHTML = `<button class="btn ghost sm" id="back-list">${ICON.chevR} Terug naar
+            ${item.archived ? "het archief" : esc(section.label.toLowerCase())}</button>`;
+          $("back-list").onclick = () => go(`#/klant/${state.org.id}/${section.id}${item.archived ? "?archief=1" : ""}`);
           $("back-list").querySelector("svg").style.transform = "rotate(180deg)";
         }
         $("page-title").textContent = item.name;
@@ -604,15 +610,19 @@
 
       if (tab.kinds) {
         const mayEdit = !state.org.may || state.org.may.edit;
-        $("page-actions").innerHTML = mayEdit
+        const inArchive = new URLSearchParams(location.hash.split("?")[1] || "").get("archief") === "1";
+        $("page-actions").innerHTML = mayEdit && !inArchive
           ? `<button class="btn sm" id="add-item">${ICON.plus} Toevoegen</button>` : "";
         const sub = await Items.listView($("view"), state.org, tab);
-        if (sub) {
+        if (inArchive) {
+          $("page-title").textContent = `${tab.title} — archief`;
+          $("page-sub").textContent = "Wat niet meer in gebruik is";
+        } else if (sub) {
           // A type's own list: "Desktops", with Configuraties above it.
           $("page-title").textContent = sub.plural;
           $("page-sub").textContent = tab.title;
         }
-        if (mayEdit) $("add-item").onclick = () => Items.openCreate(state.org, tab, $("view"),
+        if (mayEdit && !inArchive) $("add-item").onclick = () => Items.openCreate(state.org, tab, $("view"),
           sub ? { __kind: sub.kind, role: sub.role } : undefined);
         // From a machine's page: "Wachtwoord toevoegen" arrives here with the
         // machine already chosen under "Hoort bij".
@@ -682,9 +692,17 @@
 
   async function searchView() {
     const q = query();
-    $("page-title").textContent = "Zoeken";
-    $("page-sub").textContent = q ? `Resultaten voor “${q}”` : "Zoek over al je klanten heen";
-    $("page-actions").innerHTML = "";
+    const org = state.org;      // inside a customer: that customer alone
+    $("page-title").textContent = org ? `Zoeken in ${org.name}` : "Zoeken";
+    $("page-sub").textContent = q ? `Resultaten voor “${q}”`
+      : (org ? "Configuraties, wachtwoorden, documenten, contactpersonen — alles van deze klant"
+             : "Zoek over al je klanten heen");
+    // One click to the other scope, with the same words.
+    const elsewhere = org ? `#/zoeken?q=${encodeURIComponent(q)}`
+      : (searchFrom ? `#/klant/${searchFrom.id}/zoeken?q=${encodeURIComponent(q)}` : "");
+    $("page-actions").innerHTML = elsewhere ? `<button class="btn ghost sm" id="search-scope">${ICON.search}
+        ${org ? "In alle klanten zoeken" : `Alleen in ${esc(searchFrom.name)}`}</button>` : "";
+    if (elsewhere) $("search-scope").onclick = () => go(elsewhere);
     crumbs();
     renderNav();
     $("search-input").value = q;
@@ -692,7 +710,10 @@
     if (!q) { $("view").innerHTML = ""; return; }
     $("view").innerHTML = `<div class="panel"><div class="empty">Zoeken…</div></div>`;
     let found;
-    try { found = await api("/api/search?q=" + encodeURIComponent(q)); }
+    try {
+      found = await api("/api/search?q=" + encodeURIComponent(q)
+                        + (org ? `&org=${encodeURIComponent(org.id)}` : ""));
+    }
     catch (e) { $("view").innerHTML = `<div class="callout warn"><div class="ic">${ICON.alert}</div>
       <div><div class="ct">Zoeken lukte niet</div><div class="cd">${esc(e.message)}</div></div></div>`; return; }
 
@@ -719,8 +740,8 @@
           <div class="hit-top">${ICON[(KINDS[r.kind] || {}).icon || "file"]}
             <span class="hit-name">${mark(r.name, q)}</span>
             <span class="muted">${esc((KINDS[r.kind] || {}).label || r.kind)}</span>
-            ${r.archived ? '<span class="tag">afgevoerd</span>' : ""}
-            <span class="hit-org">${esc(r.org_name)}</span></div>
+            ${r.archived ? '<span class="tag">gearchiveerd</span>' : ""}
+            ${org ? "" : `<span class="hit-org">${esc(r.org_name)}</span>`}</div>
           <div class="hit-why">${r.hits.map((h) =>
             `<span><b>${esc(h.where)}:</b> ${mark(h.text, q)}</span>`).join("")}</div>
         </div>`).join("")}${more}</div>`;
@@ -730,12 +751,28 @@
   }
 
   let KINDS = {};
+  // The customer a search across everyone was started from, for the way back.
+  let searchFrom = null;
+
+  /* The search box at the top says where it searches: inside a customer, that
+     customer -- the question there is nearly always about them -- and
+     everywhere otherwise. */
+  function searchScope() {
+    $("search-input").placeholder = state.org
+      ? `Zoek in ${state.org.name}…` : "Zoek op naam, serienummer, IP of MAC…";
+  }
 
   function wireSearch() {
     const field = $("search-input");
     $("search-ico").innerHTML = ICON.search;
     const run = () => {
       const q = field.value.trim();
+      if (state.org) {
+        searchFrom = state.org;
+        go(q ? `#/klant/${state.org.id}/zoeken?q=${encodeURIComponent(q)}` : `#/klant/${state.org.id}`);
+        return;
+      }
+      if (state.tab !== "zoeken") searchFrom = null;
       go(q ? `#/zoeken?q=${encodeURIComponent(q)}` : "#/klanten");
     };
     field.addEventListener("keydown", (e) => {

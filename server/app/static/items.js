@@ -277,7 +277,9 @@ window.DocItems = function (ctx) {
     const allowed = section.kinds;
     const params = new URLSearchParams(location.hash.split("?")[1] || "");
     let kind = allowed.includes(params.get("soort")) ? params.get("soort") : null;
-    let showArchived = params.get("oud") === "1";
+    // The archive: what is no longer in use, in a view of its own rather than
+    // mixed in with what is.
+    const inArchive = params.get("archief") === "1";
 
     // Configuration types -- Desktops, Laptops, Routers, Wifi-punten -- where
     // the kinds in this section have them. "geen" is what has no type yet.
@@ -289,8 +291,9 @@ window.DocItems = function (ctx) {
     const inType = (i) => (sub ? i.kind === sub.kind && roleOf(i) === sub.role
                                : typeId === "geen" ? !typed(i) : true);
 
-    const items = all.filter((i) => allowed.includes(i.kind)
-      && (!kind || i.kind === kind) && inType(i) && (showArchived || !i.archived));
+    const items = inArchive
+      ? all.filter((i) => allowed.includes(i.kind) && i.archived)
+      : all.filter((i) => allowed.includes(i.kind) && (!kind || i.kind === kind) && inType(i) && !i.archived);
 
     const live = all.filter((i) => allowed.includes(i.kind) && !i.archived);
     const untyped = live.filter((i) => !typed(i)).length;
@@ -311,9 +314,38 @@ window.DocItems = function (ctx) {
         <span class="n">${all.filter((i) => i.kind === k && !i.archived).length}</span></button>`).join("")}
     </div>` : "";
 
+    /* Searching this list as you type: the name, every field as it reads (a
+       reference by the name it points at), and what the RMM knows -- the
+       serial number in your hand, the model, the operating system. */
+    const byId = Object.fromEntries(all.map((x) => [x.id, x]));
+    const hay = (i) => {
+      const parts = [i.name];
+      for (const f of shownFieldsOf(i.kind)) {
+        const v = f.rmm ? (i.rmm || {})[f.rmm] : (i.fields || {})[f.key];
+        if (v === undefined || v === null || v === "") continue;
+        if (f.type === "ref") parts.push((byId[v] || {}).name || "");
+        else if (Array.isArray(v)) v.forEach((e) => parts.push(e && typeof e === "object" ? `${e.label || ""} ${e.value || ""}` : String(e)));
+        else parts.push(String(v));
+      }
+      return parts.join(" ").toLowerCase();
+    };
+    const query = params.get("zoek") || "";
+    const searchBox = `<input class="inp list-search" id="list-search" type="search" value="${esc(query)}"
+      placeholder="Zoek in ${esc(section.title.toLowerCase())}…" aria-label="Zoek in deze lijst" />`;
+
     const archivedCount = all.filter((i) => allowed.includes(i.kind) && i.archived).length;
-    const oldToggle = archivedCount ? `<button class="btn ghost sm" id="toggle-old">
-      ${showArchived ? "Verberg" : "Toon"} afgevoerde (${archivedCount})</button>` : "";
+    // Always there, so it is clear where something archived went -- greyed out
+    // while there is nothing in it.
+    const archiveBtn = inArchive ? "" : `<button class="btn ghost sm" id="toggle-archive"${archivedCount
+        ? ` title="Wat niet meer in gebruik is"` : ` disabled title="Hier is nog niets gearchiveerd"`}>
+        ${ICON.box} Archief <span class="count">${archivedCount}</span></button>`;
+    const archiveHead = inArchive ? `<div class="callout info" style="margin-bottom:14px">
+        <div class="ic">${ICON.box}</div><div style="flex:1">
+        <div class="ct">Archief — ${esc(section.title.toLowerCase())}</div>
+        <div class="cd">Wat niet meer in gebruik is. Het blijft hier bewaard met al zijn gegevens en zijn
+          geschiedenis, telt nergens meer mee en waarschuwt nergens meer voor. Open een item om het
+          uit het archief te halen.</div></div>
+        <button class="btn ghost sm" id="archive-back" style="align-self:center">Terug naar de lijst</button></div>` : "";
 
     // Columns come from the kind. A mixed list can only show what every kind
     // in it has, which for equipment is the status -- better than a bare list
@@ -335,8 +367,8 @@ window.DocItems = function (ctx) {
         ${cols.map((c) => `<th>${esc(c.label)}</th>`).join("")}
         ${sharedLabels.map((l) => `<th>${esc(l)}</th>`).join("")}
         <th></th></tr></thead><tbody>
-        ${items.map((i) => `<tr data-item="${esc(i.id)}">
-          <td><b>${esc(i.name)}</b>${i.archived ? ' <span class="tag">afgevoerd</span>' : ""}
+        ${items.map((i) => `<tr data-item="${esc(i.id)}" data-hay="${esc(hay(i))}">
+          <td><b>${esc(i.name)}</b>
             ${i.restricted ? ` <span class="tag warn" title="Alleen voor genoemde collega's">${ICON.lock}</span>` : ""}
             ${i.rmm_gone ? ' <span class="tag warn">niet meer in de RMM</span>' : ""}</td>
           ${one ? "" : `<td><span class="kind-cell">${typeCell(i)}</span></td>`}
@@ -345,12 +377,21 @@ window.DocItems = function (ctx) {
           <td class="right">${i.source === "rmm" ? '<span class="tag">RMM</span>' : ""}</td>
         </tr>`).join("")}
       </tbody></table></div>`
-      : `<div class="panel"><div class="empty"><div class="big">${ICON[KINDS[allowed[0]].icon]}</div>
+      : inArchive
+        ? `<div class="panel"><div class="empty"><div class="big">${ICON.box}</div>
+            <div>Hier is niets gearchiveerd</div></div></div>`
+        : `<div class="panel"><div class="empty"><div class="big">${ICON[KINDS[allowed[0]].icon]}</div>
           <div>Nog niets vastgelegd</div>
           <div style="font-size:12.5px;margin-top:6px">${esc(section.empty)}</div></div></div>`;
 
-    host.innerHTML = `<div id="new-item"></div>${chips}
-      ${oldToggle ? `<div style="margin-bottom:12px">${oldToggle}</div>` : ""}${table}`;
+    const none = `<div class="panel hidden" id="list-none"><div class="empty">
+        <div>Niets gevonden voor “<b></b>” in ${esc(section.title.toLowerCase())}</div>
+        <div style="font-size:12.5px;margin-top:6px"><a id="list-search-all" class="link">Zoek in alles
+          van ${esc(org.name)}</a> — ook in wachtwoorden, documenten, contactpersonen en netwerkadapters.</div>
+      </div></div>`;
+    host.innerHTML = `<div id="new-item"></div>${archiveHead}
+      <div class="list-bar">${items.length ? searchBox : ""}${inArchive ? "" : (chips || "<div></div>") + archiveBtn}</div>
+      ${table}${none}`;
 
     host.querySelectorAll(".chip").forEach((b) => {
       b.onclick = () => {
@@ -362,10 +403,41 @@ window.DocItems = function (ctx) {
         go(`#/klant/${org.id}/${section.id}${next ? `?soort=${next}` : ""}`);
       };
     });
-    const old = host.querySelector("#toggle-old");
-    if (old) old.onclick = () => go(`#/klant/${org.id}/${section.id}?${new URLSearchParams(
-      { ...(kind ? { soort: kind } : {}), ...(typeId ? { type: typeId } : {}),
-        ...(showArchived ? {} : { oud: "1" }) })}`);
+    const search = host.querySelector("#list-search");
+    const applySearch = () => {
+      const typed = search.value.trim();
+      const words = typed.toLowerCase().split(/\s+/).filter(Boolean);
+      let shown = 0;
+      host.querySelectorAll("tr[data-item]").forEach((tr) => {
+        const hit = words.every((w) => tr.dataset.hay.includes(w));
+        tr.style.display = hit ? "" : "none";
+        if (hit) shown++;
+      });
+      const empty = host.querySelector("#list-none");
+      empty.classList.toggle("hidden", !(words.length && !shown));
+      empty.querySelector("b").textContent = typed;
+      const tableBox = host.querySelector("table.grid");
+      if (tableBox) tableBox.closest(".panel").classList.toggle("hidden", !!(words.length && !shown));
+      // Kept in the address, so Back from an item lands on the same search.
+      const p = new URLSearchParams(location.hash.split("?")[1] || "");
+      if (typed) p.set("zoek", typed); else p.delete("zoek");
+      history.replaceState(null, "", location.pathname + location.search
+        + location.hash.split("?")[0] + (p.toString() ? `?${p}` : ""));
+    };
+    if (search) {
+      search.addEventListener("input", applySearch);
+      search.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") { search.value = ""; applySearch(); }
+      });
+      if (query) applySearch();
+    }
+    const searchAll = host.querySelector("#list-search-all");
+    if (searchAll) searchAll.onclick = () =>
+      go(`#/klant/${org.id}/zoeken?q=${encodeURIComponent(search ? search.value.trim() : "")}`);
+    const toArchive = host.querySelector("#toggle-archive");
+    if (toArchive) toArchive.onclick = () => go(`#/klant/${org.id}/${section.id}?archief=1`);
+    const back = host.querySelector("#archive-back");
+    if (back) back.onclick = () => go(`#/klant/${org.id}/${section.id}`);
     host.querySelectorAll("tr[data-item]").forEach((tr) => {
       tr.onclick = () => go(`#/klant/${org.id}/item/${tr.dataset.item}`);
     });
@@ -486,7 +558,7 @@ window.DocItems = function (ctx) {
     const head = () => `<div class="panel item-head">
         <div class="ih-mark">${ICON[spec.icon]}</div>
         <div class="ih-txt">
-          <h3>${esc(item.name)}${item.archived ? ' <span class="tag">afgevoerd</span>' : ""}
+          <h3>${esc(item.name)}${item.archived ? ' <span class="tag">gearchiveerd</span>' : ""}
             ${item.restricted ? ` <span class="tag warn">${ICON.lock} afgeschermd</span>` : ""}</h3>
           <small>${esc(spec.label)} · ${source}</small>
         </div>
@@ -529,10 +601,18 @@ window.DocItems = function (ctx) {
           <div class="ic">${ICON.alert}</div><div style="flex:1">
           <div class="ct">Dit apparaat staat niet meer in de RMM</div>
           <div class="cd">Sinds ${when(item.rmm_seen_at)}. De pagina blijft staan — wat je erover
-            hebt vastgelegd is meestal juist dan nog nodig. Is de machine weg, voer hem dan af.
-            ${item.archived ? "" : `<button class="btn ghost sm" id="gone-archive" style="margin-left:10px">${ICON.box} Afvoeren</button>`}</div>
+            hebt vastgelegd is meestal juist dan nog nodig. Is de machine weg, archiveer hem dan.
+            ${item.archived ? "" : `<button class="btn ghost sm" id="gone-archive" style="margin-left:10px">${ICON.box} Archiveren</button>`}</div>
           </div></div>` : "";
-      host.innerHTML = head() + (editing ? "" : goneNote)
+      // Said where you arrive, so an archived page is not mistaken for one in use.
+      const archivedNote = item.archived ? `<div class="callout info" style="margin-bottom:14px">
+          <div class="ic">${ICON.box}</div><div style="flex:1">
+          <div class="ct">Gearchiveerd</div>
+          <div class="cd">Niet meer in gebruik. Alles blijft bewaard, maar het staat niet meer in de lijsten
+            en waarschuwt nergens meer voor.
+            ${mayEdit ? `<button class="btn ghost sm" id="archived-restore" style="margin-left:10px">${ICON.refresh} Uit archief halen</button>` : ""}</div>
+          </div></div>` : "";
+      host.innerHTML = head() + (editing ? "" : archivedNote + goneNote)
         + (editing ? `<div id="edit-fields">${formHtml(item.kind, item, all, org.id)}</div>
              ${adaptersFormHtml()}${portsFormHtml()}
              <div class="form-foot"><button class="btn ghost" id="edit-cancel">Annuleren</button>
@@ -545,6 +625,8 @@ window.DocItems = function (ctx) {
       wireHead();
       const goneBtn = host.querySelector("#gone-archive");
       if (goneBtn) goneBtn.onclick = () => host.querySelector("#btn-archive").click();
+      const restoreBtn = host.querySelector("#archived-restore");
+      if (restoreBtn) restoreBtn.onclick = () => host.querySelector("#btn-archive").click();
       if (editing) {
         host.querySelector("#edit-cancel").onclick = () => { editing = false; draw(); };
         host.querySelector("#edit-save").onclick = saveEdit;
@@ -576,7 +658,7 @@ window.DocItems = function (ctx) {
       act.innerHTML = editing ? "" : `
         <button class="btn ghost sm" id="btn-edit">${ICON.pencil} Bewerken</button>
         <button class="btn ghost sm" id="btn-copy" title="Een nieuw ${esc(spec.label.toLowerCase())} met deze gegevens">${ICON.copy} Kopie maken</button>
-        <button class="btn ghost sm" id="btn-archive">${item.archived ? ICON.refresh + " Terugzetten" : ICON.box + " Afvoeren"}</button>`;
+        <button class="btn ghost sm" id="btn-archive">${item.archived ? ICON.refresh + " Uit archief halen" : ICON.box + " Archiveren"}</button>`;
       if (editing) return;
       act.querySelector("#btn-edit").onclick = () => { editing = true; draw(); };
       act.querySelector("#btn-copy").onclick = () => {
@@ -590,7 +672,7 @@ window.DocItems = function (ctx) {
             body: JSON.stringify({ archived: !item.archived }),
           });
           forget(org.id);
-          toast(item.archived ? "Afgevoerd" : "Teruggezet");
+          toast(item.archived ? "Gearchiveerd" : "Uit het archief gehaald");
           draw();
         } catch (e) { toast(e.message); }
       };
@@ -1247,7 +1329,7 @@ window.DocItems = function (ctx) {
             ${mayEdit ? `<button class="btn ghost sm" id="pw-add" style="margin-left:auto">${ICON.plus} Wachtwoord toevoegen</button>` : ""}</div>
           ${rows.map((r) => `<div class="rel-row" data-goto="${esc(r.id)}">
               <span class="rel-ic">${ICON.key}</span><span class="rel-name">${esc(r.name)}</span>
-              ${r.archived ? '<span class="tag">afgevoerd</span>' : ""}</div>`).join("")}
+              ${r.archived ? '<span class="tag">gearchiveerd</span>' : ""}</div>`).join("")}
         </div>`;
       slot.querySelectorAll("[data-goto]").forEach((row) => {
         row.onclick = () => go(`#/klant/${org.id}/item/${row.dataset.goto}`);
@@ -1273,7 +1355,7 @@ window.DocItems = function (ctx) {
               <div>${list.map((r) => `<div class="rel-row" data-goto="${esc(r.id)}">
                 <span class="rel-ic">${ICON[KINDS[r.kind] ? KINDS[r.kind].icon : "link"]}</span>
                 <span class="rel-name">${esc(r.name)}</span>
-                ${r.archived ? '<span class="tag">afgevoerd</span>' : ""}
+                ${r.archived ? '<span class="tag">gearchiveerd</span>' : ""}
                 <small>${esc(KINDS[r.kind] ? KINDS[r.kind].label : r.kind)}</small>
               </div>`).join("")}</div>
             </div>`).join("")}
@@ -1350,7 +1432,7 @@ window.DocItems = function (ctx) {
       const slot = host.querySelector("#history");
       const revisions = await api(`/api/items/${item.id}/revisions`).catch(() => []);
       const word = { created: "aangemaakt", updated: "gewijzigd",
-                     archived: "afgevoerd", restored: "teruggezet",
+                     archived: "gearchiveerd", restored: "uit het archief gehaald",
                      "rmm-gone": "verdween uit de RMM", "rmm-back": "staat weer in de RMM" };
       slot.innerHTML = `<div class="panel">
           <div class="panel-head"><h2>Geschiedenis</h2>

@@ -681,7 +681,7 @@ def remove_item(item_id: str, request: Request,
         raise HTTPException(
             status_code=409,
             detail=f"Hier wordt nog naar verwezen door {names}{more}. "
-                   "Haal die verwijzing weg, of kies Afvoeren in plaats van verwijderen.")
+                   "Haal die verwijzing weg, of kies Archiveren in plaats van verwijderen.")
     database.delete_item(item_id)
     database.audit("item.delete", user_email=user["email"], org_id=item["org_id"],
                    target=item["name"], ip=auth.client_ip(request))
@@ -1096,12 +1096,17 @@ def _snippet(text: str, needle: str, width: int = 90) -> str:
 
 
 @app.get("/api/search")
-def search(q: str = "", user: dict = Depends(auth.current_user)):
+def search(q: str = "", org: str = "", user: dict = Depends(auth.current_user)):
     needle = (q or "").strip().lower()
     if len(needle) < 2:
         return {"query": q, "results": [], "short": True}
 
-    orgs = database.list_orgs() if user.get("is_admin") else database.user_orgs(user["email"])
+    # Inside a customer the question is usually about that customer: searched
+    # there alone when asked, among everything else otherwise.
+    if org:
+        orgs = [_may_see(user, org)]
+    else:
+        orgs = database.list_orgs() if user.get("is_admin") else database.user_orgs(user["email"])
     hidden = _hidden(user)
     results = []
     for org in orgs:
@@ -1429,8 +1434,8 @@ def remove_type(type_id: str, request: Request,
         raise HTTPException(
             status_code=409,
             detail=f"Er {'is' if count == 1 else 'zijn'} nog {count} "
-                   f"{'item' if count == 1 else 'items'} van dit type. Voer die eerst af "
-                   "of verwijder ze.")
+                   f"{'item' if count == 1 else 'items'} van dit type — gearchiveerde "
+                   "tellen mee. Verwijder die eerst.")
     database.delete_item_type(type_id)
     schema.forget_custom()
     database.audit("type.delete", user_email=user["email"], target=existing["label"],

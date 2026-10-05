@@ -212,7 +212,7 @@ def to_html(data: dict, by: str) -> str:
     for name, spec, members in groups:
         parts.append(f"<h2 id='k-{e(name)}'>{e(spec.get('plural', name))}</h2>")
         for item in members:
-            tags = (" <span class='tag'>afgevoerd</span>" if item["archived"] else "") + \
+            tags = (" <span class='tag'>gearchiveerd</span>" if item["archived"] else "") + \
                    (" <span class='tag'>uit de RMM</span>" if item["from_rmm"] else "")
             parts.append(f"<section class='item'><h3>{e(item['name'])}{tags}</h3>")
             body = [f for f in item["fields"] if f["key"] == "body"]
@@ -257,7 +257,7 @@ def to_csv(data: dict) -> dict:
         secret_labels = [label for _, label in _secret_slots(name)] if data["with_passwords"] else []
         buf = io.StringIO()
         writer = csv.writer(buf, delimiter=";", quoting=csv.QUOTE_MINIMAL, lineterminator="\r\n")
-        writer.writerow(["Naam", *labels, *secret_labels, "Afgevoerd"])
+        writer.writerow(["Naam", *labels, *secret_labels, "Gearchiveerd"])
         for item in members:
             by_label = {f["label"]: f["value"] for f in item["fields"]}
             secrets = {s["label"]: s.get("password") or "" for s in item.get("passwords", [])}

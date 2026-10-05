@@ -34,7 +34,7 @@ from . import database
 # A `secret` field is encrypted and never travels with the item (see vault.py);
 # only a type you define yourself can have one, and it may have several.
 
-# Not "afgevoerd": equipment that is out of use is archived, and one fact
+# Not "gearchiveerd": equipment that is out of use is archived, and one fact
 # belongs in one place.
 STATUS = ["In gebruik", "Reserve", "In reparatie"]
 

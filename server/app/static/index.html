@@ -88,6 +88,14 @@
     .blocks > .panel.half { grid-column: auto; }
     .blocks > .panel.half .deflist { grid-template-columns: minmax(110px, 40%) 1fr; }
     @media (max-width: 900px) { .blocks > .panel.half { grid-column: 1 / -1; } }
+    /* Above a list: the filter chips on the left, the archive on the right. */
+    .list-bar { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+    .list-search { width: 260px; flex: none; height: 32px; }
+    @media (max-width: 720px) { .list-search { width: 100%; } }
+    a.link { color: var(--accent); cursor: pointer; }
+    .list-bar .chips { flex: 1; margin-bottom: 0; }
+    .list-bar > .btn { margin-left: auto; flex: none; }
+    .list-bar > .btn .count { margin-left: 2px; font-weight: 700; opacity: .7; }
     /* Scrolled to (a copy being made): clear of the bar that stays at the top. */
     #new-item { scroll-margin-top: 84px; }
     /* The sections under an item's blocks, spaced like the blocks themselves. */
