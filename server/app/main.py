@@ -614,8 +614,15 @@ async def create_org_item(org_id: str, request: Request,
         database.audit("secret.write", user_email=user["email"], org_id=org_id,
                        target=name, ip=auth.client_ip(request))
         item = database.get_item(item["id"])
+    # Made with "Kopie maken": the log says from what -- only when the original
+    # is at this customer and this person may see it.
+    copied = ""
+    if body.get("copy_of"):
+        original = database.get_item(str(body["copy_of"]))
+        if original and original["org_id"] == org_id and original["id"] not in _hidden(user):
+            copied = f", kopie van {original['name']}"
     database.audit("item.create", user_email=user["email"], org_id=org_id,
-                   target=name, detail=schema.kind(kind)["label"],
+                   target=name, detail=schema.kind(kind)["label"] + copied,
                    ip=auth.client_ip(request))
     return _decorate(item, user)
 

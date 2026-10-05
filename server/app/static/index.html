@@ -88,6 +88,8 @@
     .blocks > .panel.half { grid-column: auto; }
     .blocks > .panel.half .deflist { grid-template-columns: minmax(110px, 40%) 1fr; }
     @media (max-width: 900px) { .blocks > .panel.half { grid-column: 1 / -1; } }
+    /* Scrolled to (a copy being made): clear of the bar that stays at the top. */
+    #new-item { scroll-margin-top: 84px; }
     /* The sections under an item's blocks, spaced like the blocks themselves. */
     #secret > *, #access > *, #adapters > *, #ports > *, #passwords > *,
     #referred > *, #related > *, #history > * { margin-bottom: 14px; }

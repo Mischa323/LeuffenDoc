@@ -103,7 +103,9 @@
     toastTimer = setTimeout(() => el.classList.remove("show"), 2600);
   }
 
-  const Items = window.DocItems({ api, esc, go, toast });
+  const Items = window.DocItems({ api, esc, go, toast,
+    // Which section of a customer lists a kind -- where a copy is made.
+    sectionOf: (kind) => ORG.find((t) => (t.kinds || []).includes(kind)) });
 
   /* Types defined here become sections inside a customer, after the built-in
      ones. They are rebuilt rather than reloaded, so making a type and using it
@@ -617,6 +619,18 @@
         const voor = new URLSearchParams(location.hash.split("?")[1] || "").get("voor");
         if (mayEdit && voor && tab.id === "wachtwoorden") {
           await Items.openCreate(state.org, tab, $("view"), { device: voor });
+        }
+        // From an item's page: "Kopie maken" arrives here with the form filled
+        // in from the original. Nothing is saved until Aanmaken is pressed.
+        const kopie = new URLSearchParams(location.hash.split("?")[1] || "").get("kopie");
+        if (mayEdit && kopie) {
+          // Off the address bar again, so a refresh or Back does not reopen it.
+          history.replaceState(null, "", location.pathname + location.search
+            + location.hash.replace(/([?&])kopie=[^&]*&?/, "$1").replace(/[?&]$/, ""));
+          const original = await api(`/api/items/${encodeURIComponent(kopie)}`).catch(() => null);
+          if (original && tab.kinds.includes(original.kind)) {
+            await Items.openCreate(state.org, tab, $("view"), Items.copyOf(original));
+          }
         }
         if (tab.id === "wachtwoorden" && state.me.is_admin) await showVaultKey();
         return;

@@ -385,15 +385,23 @@ window.DocItems = function (ctx) {
     // Adding from a type's list starts on that type's kind.
     let kind = prefill && section.kinds.includes(prefill.__kind) ? prefill.__kind : section.kinds[0];
 
+    const copying = prefill && prefill.__from;
     const draw = () => {
       slot.innerHTML = `<div class="panel new-head">
-          <div class="panel-head"><h2>${esc(KINDS[kind].label)} toevoegen</h2></div>
+          <div class="panel-head"><h2>${esc(KINDS[kind].label)} toevoegen</h2>
+            ${copying ? `<span class="sub">als kopie van ${esc(prefill.__from)}</span>` : ""}</div>
           <div class="form-body">
+            ${copying ? `<div class="callout info" style="margin-bottom:14px"><div class="ic">${ICON.copy}</div>
+              <div class="cd">De ingevulde velden van <b>${esc(prefill.__from)}</b> staan er al in. Pas aan wat
+                anders is en druk op <b>Aanmaken</b> — tot dan is er niets opgeslagen. Niet mee gaan:
+                wachtwoorden, de koppeling met de RMM, netwerkadapters en switchpoorten, wat eraan
+                gekoppeld is, en de geschiedenis.</div></div>` : ""}
             ${section.kinds.length > 1 ? `<div class="frow"><label>Soort</label>
               <select class="inp" id="new-kind">${section.kinds.map((k) =>
                 `<option value="${k}"${k === kind ? " selected" : ""}>${esc(KINDS[k].label)}</option>`).join("")}</select></div>` : ""}
             <div class="frow"><label for="new-name">Naam</label>
-              <input class="inp" id="new-name" placeholder="${esc(section.example)}" /></div>
+              <input class="inp" id="new-name" placeholder="${esc(section.example)}"
+                     value="${esc((prefill && prefill.__name) || "")}" /></div>
           </div>
         </div>
         <div id="new-fields">${formHtml(kind, null, all, org.id, prefill)}</div>
@@ -420,7 +428,10 @@ window.DocItems = function (ctx) {
       slot.querySelector("#new-cancel").onclick = () => { slot.dataset.open = "0"; slot.innerHTML = ""; };
       slot.querySelector("#new-save").onclick = save;
       wireListFields(slot);
-      slot.querySelector("#new-name").focus();
+      const nameInput = slot.querySelector("#new-name");
+      nameInput.focus();
+      if (copying) nameInput.select();          // a copy almost always gets a name of its own
+      if (copying) slot.scrollIntoView({ block: "start" });
     };
 
     const save = async () => {
@@ -438,6 +449,7 @@ window.DocItems = function (ctx) {
           body: JSON.stringify({
             kind, name, fields: readForm(slot.querySelector("#new-fields")),
             password: (slot.querySelector("#new-secret") || {}).value || undefined,
+            copy_of: (prefill && prefill.__copyOf) || undefined,
           }),
         });
         forget(org.id);
@@ -563,9 +575,14 @@ window.DocItems = function (ctx) {
       }
       act.innerHTML = editing ? "" : `
         <button class="btn ghost sm" id="btn-edit">${ICON.pencil} Bewerken</button>
+        <button class="btn ghost sm" id="btn-copy" title="Een nieuw ${esc(spec.label.toLowerCase())} met deze gegevens">${ICON.copy} Kopie maken</button>
         <button class="btn ghost sm" id="btn-archive">${item.archived ? ICON.refresh + " Terugzetten" : ICON.box + " Afvoeren"}</button>`;
       if (editing) return;
       act.querySelector("#btn-edit").onclick = () => { editing = true; draw(); };
+      act.querySelector("#btn-copy").onclick = () => {
+        const section = ctx.sectionOf && ctx.sectionOf(item.kind);
+        if (section) go(`#/klant/${org.id}/${section.id}?kopie=${item.id}`);
+      };
       act.querySelector("#btn-archive").onclick = async () => {
         try {
           item = await api(`/api/items/${item.id}/archive`, {
@@ -1388,10 +1405,25 @@ window.DocItems = function (ctx) {
     return out.sort((a, b) => String(a.on).localeCompare(String(b.on)));
   }
 
+  /* What a copy starts with: the original's filled-in fields, as the form for a
+     new one takes them. Not what the RMM reports (that belongs to the device),
+     not passwords, and nothing hidden -- what is not shown is not copied. */
+  function copyOf(item) {
+    const prefill = { __kind: item.kind, __name: `${item.name} (kopie)`,
+                      __from: item.name, __copyOf: item.id };
+    for (const f of shownFieldsOf(item.kind)) {
+      if (f.rmm || f.type === "secret") continue;
+      const value = item.fields[f.key];
+      if (value === undefined || value === null || value === "" || (Array.isArray(value) && !value.length)) continue;
+      prefill[f.key] = value;
+    }
+    return prefill;
+  }
+
   async function itemName(itemId) {
     try { return (await api(`/api/items/${itemId}`)).name; } catch (e) { return null; }
   }
 
   return { kinds, index, forget, listView, detailView, openCreate, expiring, itemName, setConfig,
-           subtypesOf };
+           subtypesOf, copyOf };
 };
