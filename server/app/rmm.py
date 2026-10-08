@@ -419,7 +419,7 @@ def sync_network(by_rmm_org: dict) -> dict | None:
         if not existing:
             twin = database.unlinked_twin(org_id, "network", name, mac)
             if twin:
-                database.link_rmm(twin["id"], key)
+                database.link_rmm(twin["id"], key, NET_KEYS)
                 existing = twin
         if existing:
             database.update_item(existing["id"], rmm=payload, rmm_keys=NET_KEYS,

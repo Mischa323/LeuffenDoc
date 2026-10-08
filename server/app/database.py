@@ -595,10 +595,17 @@ def unlinked_twin(org_id: str, kind: str, name: str, mac: str) -> dict | None:
     return _item_out(r) if r else None
 
 
-def link_rmm(item_id: str, device_id: str) -> None:
-    """From now on this item mirrors that device in the RMM."""
+def link_rmm(item_id: str, device_id: str, keys: list) -> None:
+    """From now on this item mirrors that device in the RMM. What was typed in
+    the fields the RMM now fills (``keys``) is taken out of them rather than
+    left underneath, where nobody sees it -- and kept as what the RMM's value
+    replaces, so the history says "Model: typed -> reported"."""
     with write() as conn:
-        conn.execute("UPDATE items SET source='rmm', rmm_device_id=? WHERE id=?", (device_id, item_id))
+        r = conn.execute("SELECT fields_json FROM items WHERE id=?", (item_id,)).fetchone()
+        fields = json.loads((r["fields_json"] if r else None) or "{}")
+        before = {key: fields.pop(key) for key in keys if key in fields}
+        conn.execute("UPDATE items SET source='rmm', rmm_device_id=?, fields_json=?, rmm_json=? WHERE id=?",
+                     (device_id, json.dumps(fields), json.dumps(before) if before else None, item_id))
 
 
 def count_items(org_id: str) -> dict:

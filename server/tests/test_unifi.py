@@ -35,12 +35,18 @@ def test_unifi_equipment_is_documented(admin, monkeypatch):
     assert taken_over["id"] == hand["id"] and taken_over["rmm_device_id"] == "unifi:aabbcc000002"
     assert taken_over["rmm"]["model"] == "USW-24-PoE" and taken_over["rmm"]["manufacturer"] == "Ubiquiti"
     assert taken_over["rmm"]["uplink_mac"] == "aa:bb:cc:00:00:01" and taken_over["rmm"]["clients"] == 14
+    # What was typed where UniFi now reports is not left underneath, unseen:
+    # the history says what replaced it.
+    assert taken_over["fields"] == {"role": "Switch", "serial": "SN-123"}
+    told = {c["key"]: (c["from"], c["to"])                     # oldest first, so the newest line wins
+            for r in reversed(admin.get(f"/api/items/{hand['id']}/revisions").json()) for c in r["changes"]}
+    assert told["model"] == ("getypt", "USW-24-PoE") and told["firmware"] == ("oud", "4.0.6")
 
     # What UniFi knows comes from UniFi; what it does not stays yours.
     assert admin.patch(f"/api/items/{hand['id']}",
                        json={"fields": {"serial": "SN-456", "model": "overschreven"}}).status_code == 200
     now = database.get_item(hand["id"])
-    assert now["fields"]["serial"] == "SN-456" and now["fields"]["model"] == "getypt"
+    assert now["fields"]["serial"] == "SN-456" and "model" not in now["fields"]
 
     # The management address is an adapter: the MAC is searchable, and an
     # access point can be patched into a switch port.
