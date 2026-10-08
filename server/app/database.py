@@ -32,6 +32,16 @@ CREATE TABLE IF NOT EXISTS settings (
     value       TEXT
 );
 
+-- What one person set for themselves -- how their sidebar is laid out -- on
+-- top of what the administrator set for everyone.
+CREATE TABLE IF NOT EXISTS user_prefs (
+    email       TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    value       TEXT,
+    updated_at  REAL NOT NULL,
+    PRIMARY KEY (email, key)
+);
+
 -- Customers. `rmm_org_id` ties one to its organisation in the RMM, which is how
 -- documentation and devices find each other; a customer that exists only here
 -- (no RMM organisation) simply leaves it empty.
@@ -429,6 +439,22 @@ def set_setting(key: str, value: str | None) -> None:
 
 def all_settings() -> dict:
     return {r["key"]: r["value"] for r in rows("SELECT key, value FROM settings")}
+
+
+def get_pref(email: str, key: str) -> str | None:
+    r = row("SELECT value FROM user_prefs WHERE email=? AND key=?", (email.lower(), key))
+    return r["value"] if r else None
+
+
+def set_pref(email: str, key: str, value: str | None) -> None:
+    """One person's own setting; None takes it away again."""
+    with write() as conn:
+        if value is None:
+            conn.execute("DELETE FROM user_prefs WHERE email=? AND key=?", (email.lower(), key))
+        else:
+            conn.execute("INSERT INTO user_prefs (email, key, value, updated_at) VALUES (?, ?, ?, ?) "
+                         "ON CONFLICT(email, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                         (email.lower(), key, value, time.time()))
 
 
 # --------------------------------------------------------------------------- #

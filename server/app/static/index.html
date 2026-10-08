@@ -674,6 +674,33 @@
     .nav-group:not(.folded) .nav-group-head svg { margin-left: auto; }
     .nav-group.folded .nav-group-head svg { transform: rotate(-90deg); }
     .nav-group.folded .nav-group-items { display: none; }
+    .nav-group.bare { margin-top: 4px; }
+    .nav button.nav-customize { margin-top: 12px; font-size: 12.5px; color: var(--text-faint); min-height: 30px; }
+    .nav button.nav-customize svg { width: 14px; height: 14px; }
+
+    /* ---- laying out the sidebar ---- */
+    .sbe { max-width: 760px; }
+    .sbe-intro { font-size: 13px; color: var(--text-dim); line-height: 1.6; margin-bottom: 14px; }
+    .sbe-intro a { color: var(--accent); }
+    .sbe-groups { display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px; }
+    .sbe-ghead { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--border-soft); }
+    .sbe-gname { flex: 1; height: 32px; font-weight: 600; }
+    .sbe-items { padding: 6px; min-height: 44px; display: flex; flex-direction: column; gap: 4px; border-radius: var(--r-sm); }
+    .sbe-items.over { outline: 2px dashed var(--accent); outline-offset: -4px; }
+    .sbe-empty { padding: 10px; font-size: 12.5px; color: var(--text-faint); text-align: center; }
+    .sbe-item { display: flex; align-items: center; gap: 9px; padding: 6px 8px 6px 10px; border: 1px solid var(--border);
+                border-radius: var(--r-sm); background: var(--surface-2); font-size: 13px; cursor: grab; }
+    .sbe-item.dragging { opacity: .4; }
+    .sbe-item.sbe-moved { animation: pb-flash 1.2s ease-out; }
+    .sbe-grip { color: var(--text-faint); font-size: 13px; }
+    .sbe-ic { display: inline-flex; color: var(--text-dim); }
+    .sbe-ic svg { width: 15px; height: 15px; }
+    .sbe-name { flex: 1; font-weight: 550; }
+    .sbe-acts { display: inline-flex; gap: 2px; }
+    .sbe-hidden { margin-top: 14px; }
+    .sbe-hrows { padding: 6px; display: flex; flex-direction: column; gap: 4px; }
+    .sbe-item.hidden-one { cursor: default; opacity: .75; }
+    .sbe-foot { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
     .tc-subs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
     .tc-subs .tag svg { width: 11px; height: 11px; margin-right: 4px; }
 
@@ -800,6 +827,7 @@
   <script src="/types.js"></script>
   <script src="/settings.js"></script>
   <script src="/vault.js"></script>
+  <script src="/sidebar.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

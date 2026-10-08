@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Added
+- **The sidebar laid out by an administrator, and by everyone for themselves.**
+  - **Instellingen → Zijbalk** sets how the sidebar inside a customer looks for everyone: rename groups, add and remove them, move them up and down, drag sections from one group to another or into a different order, and hide what nobody uses. A group without a name has no heading. **Terug naar wat LeuffenDoc meebrengt** undoes it.
+  - **Zijbalk aanpassen**, at the bottom of the sidebar, does the same for yourself only, on top of the administrator's default. **Terug naar de standaard** drops your own layout again.
+  - The customer's overview shows its sections in the same order, without the hidden ones. A hidden section is still reachable through a link or search.
+  - A section that comes later — a type of your own made since, or one a later version adds — is never lost: it appears in its usual group. Without a mouse, the arrows on each section and group do what dragging does.
 - **Microsoft 365, documented from the RMM.** A new section **Microsoft 365** holds a customer's tenant. What only people know is typed here: the partner and GDAP, how MFA is arranged, the break-glass account, how the tenant is backed up, and who may reach which shared mailbox. The tenant itself is linked **in the RMM** (the customer's **Microsoft 365** tab, with an app registration in the tenant), which reads it every few hours and warns when an app secret expires — and on every sync the rest arrives here instead of being typed:
   - the domains (which is the default);
   - every subscription with its seats, how many are used, its status and **when it renews**;

@@ -41,6 +41,8 @@
       sub: "Momentopnamen, en een versleutelde kopie om mee te nemen" },
     { id: "toegang", label: "Toegang", icon: "lock", title: "Toegang",
       sub: "De reverse proxy, cookies en wie altijd beheerder is" },
+    { id: "zijbalk", label: "Zijbalk", icon: "sliders", title: "Zijbalk",
+      sub: "Hoe de zijbalk bij een klant er voor iedereen uitziet" },
     { id: "types", label: "Documenttypes", icon: "layers", title: "Documenttypes",
       sub: "Zelf samengestelde types, voor al je klanten" },
     { id: "logboek", label: "Logboek", icon: "history", title: "Logboek",
@@ -173,6 +175,7 @@
   }
 
   const Settings = window.DocSettings({ api, esc, toast, reloadConfig });
+  const Sidebar = window.DocSidebar({ esc, toast });
   const Vault = window.DocVault({ api, esc, toast, go: (hash) => go(hash) });
 
   // ---- theme (remembered per browser) ----
@@ -234,6 +237,9 @@
       if (state.org && parts[2] === "zoeken") {
         state.item = null;
         state.tab = "zoeken";
+      } else if (state.org && parts[2] === "zijbalk") {
+        state.item = null;
+        state.tab = "zijbalk";
       } else if (state.org && parts[2] === "item" && parts[3]) {
         state.item = parts[3];
         state.tab = "overzicht";
@@ -296,6 +302,56 @@
     }
   }
 
+  /* The sidebar's layout: a person's own, else the one an administrator set
+     for everyone, else what LeuffenDoc brings (the groups in NAV_GROUPS). A
+     saved layout never loses a section: one it does not mention -- a type
+     made since, a section a later version adds -- goes to its usual group. */
+  function builtInLayout() {
+    const groups = [];
+    for (const t of ORG) {
+      if (t.id === "overzicht") continue;
+      const id = t.group || "eigen";
+      let g = groups.find((x) => x.id === id);
+      if (!g) { g = { id, label: NAV_GROUPS[id] || "Overig", sections: [] }; groups.push(g); }
+      g.sections.push(t.id);
+    }
+    return { groups, hidden: [] };
+  }
+
+  function layoutInForce() {
+    const sb = state.sidebar || {};
+    return sb.mine || sb.default || builtInLayout();
+  }
+
+  function arrangeNav(layout) {
+    const sections = ORG.filter((t) => t.id !== "overzicht");
+    const byId = new Map(sections.map((t) => [t.id, t]));
+    const hidden = new Set(layout.hidden || []);
+    const used = new Set();
+    const groups = (layout.groups || []).map((g) => ({
+      id: g.id, label: g.label || "",
+      tabs: (g.sections || []).filter((id) => byId.has(id) && !hidden.has(id) && !used.has(id) && used.add(id))
+        .map((id) => byId.get(id)),
+    }));
+    for (const t of sections) {
+      if (used.has(t.id) || hidden.has(t.id)) continue;
+      const home = t.group || "eigen";
+      let g = groups.find((x) => x.id === home);
+      if (!g) { g = { id: home, label: NAV_GROUPS[home] || "Overig", tabs: [] }; groups.push(g); }
+      g.tabs.push(t);
+      used.add(t.id);
+    }
+    return groups.filter((g) => g.tabs.length);
+  }
+
+  // What the editor works with: every section, with the group it belongs in.
+  function sidebarSections() {
+    return ORG.filter((t) => t.id !== "overzicht").map((t) => ({
+      id: t.id, label: t.label, icon: t.icon, home: t.group || "eigen", homeLabel: NAV_GROUPS[t.group || "eigen"] }));
+  }
+
+  let navGroups = [];
+
   function renderNav() {
     $("nav-label").textContent = state.org ? "Deze klant" : "Overzicht";
     const tabs = tabsHere();
@@ -309,31 +365,32 @@
              aria-expanded="${!shut}" title="${shut ? "Soorten tonen" : "Soorten inklappen"}">${ICON.chevD}</span>` : ""}
        </button>${subs ? `<div class="nav-subs${shut ? " hidden" : ""}" data-subs="${t.id}"></div>` : ""}`;
     };
-    let html = "";
-    let open = null;
-    for (const t of tabs) {
-      const group = state.org ? (t.group || null) : null;
-      if (group !== open) {
-        if (open) html += `</div></div>`;
-        open = group;
-        if (group) {
-          const here = tabs.some((x) => x.group === group && x.id === state.tab);
-          const shut = folded.has(`g:${group}`) && !here;
-          html += `<div class="nav-group${shut ? " folded" : ""}" data-group="${group}">
-            <button class="nav-group-head" data-group-fold="${group}" aria-expanded="${!shut}">
-              <span>${esc(NAV_GROUPS[group] || group)}</span><span class="nav-group-n" data-group-count="${group}"></span>${ICON.chevD}
-            </button><div class="nav-group-items">`;
-        }
-      }
-      html += button(t);
+    let html;
+    if (state.org) {
+      navGroups = arrangeNav(layoutInForce());
+      const top = ORG.find((t) => t.id === "overzicht");
+      html = button(top) + navGroups.map((g) => {
+        // A group without a name has no heading: its sections stand on their own.
+        if (!g.label) return `<div class="nav-group bare" data-group="${esc(g.id)}"><div class="nav-group-items">${g.tabs.map(button).join("")}</div></div>`;
+        const here = g.tabs.some((x) => x.id === state.tab);
+        const shut = folded.has(`g:${g.id}`) && !here;
+        return `<div class="nav-group${shut ? " folded" : ""}" data-group="${esc(g.id)}">
+            <button class="nav-group-head" data-group-fold="${esc(g.id)}" aria-expanded="${!shut}">
+              <span>${esc(g.label)}</span><span class="nav-group-n" data-group-count="${esc(g.id)}"></span>${ICON.chevD}
+            </button><div class="nav-group-items">${g.tabs.map(button).join("")}</div></div>`;
+      }).join("");
+    } else {
+      navGroups = [];
+      html = tabs.map(button).join("");
     }
-    if (open) html += `</div></div>`;
     $("nav").innerHTML = html
-      + (state.org ? `<button data-back="1" style="margin-top:10px">
+      + (state.org ? `<button data-customize="1" class="nav-customize${state.tab === "zijbalk" ? " active" : ""}">${ICON.sliders} Zijbalk aanpassen</button>
+           <button data-back="1" style="margin-top:4px">
            <span class="back-ico">${ICON.chevR}</span> Alle klanten</button>` : "");
     $("nav").querySelectorAll("button").forEach((b) => {
       b.onclick = (ev) => {
         if (b.dataset.groupFold) { toggleGroup(b.dataset.groupFold); return; }
+        if (b.dataset.customize) { go(`#/klant/${state.org.id}/zijbalk`); return; }
         const fold = ev.target.closest("[data-fold]");
         if (fold) { toggleFold(fold.dataset.fold); return; }
         go(b.dataset.back ? "#/klanten"
@@ -341,6 +398,76 @@
       };
     });
     if (state.org) fillCounts(state.org.id);
+  }
+
+  /* Laying it out: for yourself, from the sidebar; for everyone, under
+     Instellingen. */
+  function mySidebarView() {
+    const sb = state.sidebar || {};
+    $("page-title").textContent = "Zijbalk aanpassen";
+    $("page-sub").textContent = "Hoe de zijbalk bij een klant er voor jou uitziet";
+    crumbs();
+    renderNav();
+    $("page-actions").innerHTML = "";
+    const using = sb.mine ? "Je gebruikt nu <b>je eigen indeling</b>."
+      : sb.default ? "Je gebruikt nu de indeling die <b>de beheerder voor iedereen</b> koos."
+      : "Je gebruikt nu de indeling die LeuffenDoc meebrengt.";
+    const admin = state.me.is_admin
+      ? ` Als beheerder stel je de standaard voor iedereen in onder <a href="#/instellingen/zijbalk">Instellingen → Zijbalk</a>.` : "";
+    const back = () => go(`#/klant/${state.org.id}/overzicht`);
+    Sidebar.editor($("view"), {
+      sections: sidebarSections(),
+      layout: sb.mine || sb.default || builtInLayout(),
+      intro: `${using} Sleep secties naar een andere groep of plek, geef groepen een andere naam, of verberg wat je nooit gebruikt.
+        Het geldt alleen voor jou.${admin}`,
+      actions: [
+        { label: `${ICON.save} Opslaan voor mij`, primary: true, run: async (layout) => {
+          try {
+            state.sidebar.mine = await api("/api/sidebar/mine", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(layout) });
+            toast("Je zijbalk is opgeslagen");
+            back();
+          } catch (e) { toast(e.message); }
+        } },
+        ...(sb.mine ? [{ label: `${ICON.restart} Terug naar de standaard`, run: async () => {
+          try {
+            await api("/api/sidebar/mine", { method: "DELETE" });
+            state.sidebar.mine = null;
+            toast("Je gebruikt weer de standaard");
+            back();
+          } catch (e) { toast(e.message); }
+        } }] : []),
+        { label: "Annuleren", run: async () => back() },
+      ],
+    });
+  }
+
+  function defaultSidebarView() {
+    const sb = state.sidebar || {};
+    Sidebar.editor($("view"), {
+      sections: sidebarSections(),
+      layout: sb.default || builtInLayout(),
+      intro: `Zo ziet de zijbalk bij een klant er voor iedereen uit — tenzij iemand hem voor zichzelf aanpast
+        (met <b>Zijbalk aanpassen</b> onderaan de zijbalk). ${sb.default ? "Er is een eigen standaard ingesteld."
+        : "Nu geldt de indeling die LeuffenDoc meebrengt."} Een sectie die er later bij komt — een nieuw eigen type —
+        komt vanzelf in zijn gebruikelijke groep.`,
+      actions: [
+        { label: `${ICON.save} Opslaan voor iedereen`, primary: true, run: async (layout) => {
+          try {
+            state.sidebar.default = await api("/api/sidebar/default", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(layout) });
+            toast("De standaard zijbalk is opgeslagen");
+            defaultSidebarView();
+          } catch (e) { toast(e.message); }
+        } },
+        ...(sb.default ? [{ label: `${ICON.restart} Terug naar wat LeuffenDoc meebrengt`, run: async () => {
+          try {
+            await api("/api/sidebar/default", { method: "DELETE" });
+            state.sidebar.default = null;
+            toast("De standaard is teruggezet");
+            defaultSidebarView();
+          } catch (e) { toast(e.message); }
+        } }] : []),
+      ],
+    });
   }
 
   // How many of each there are at this customer, next to the section. Fetched
@@ -357,8 +484,8 @@
     });
     // A folded group still says how much is in it.
     $("nav").querySelectorAll("[data-group-count]").forEach((el) => {
-      el.textContent = ORG.filter((t) => t.group === el.dataset.groupCount)
-        .flatMap((t) => t.kinds || []).reduce((n, k) => n + (counts[k] || 0), 0);
+      const g = navGroups.find((x) => x.id === el.dataset.groupCount);
+      el.textContent = (g ? g.tabs : []).flatMap((t) => t.kinds || []).reduce((n, k) => n + (counts[k] || 0), 0);
     });
     // Under a section with configuration types: the types this customer has.
     const roles = summary.roles || {};
@@ -405,6 +532,7 @@
     });
     $("page-actions").innerHTML = "";
     if (sec.id === "logboek") { $("view").innerHTML = await auditView(); return; }
+    if (sec.id === "zijbalk") { defaultSidebarView(); return; }
     if (sec.id === "types") {
       $("page-actions").innerHTML =
         `<button class="btn sm" id="new-type">${ICON.plus} Type toevoegen</button>`;
@@ -515,7 +643,8 @@
     for (const ch of o.name) h = (h * 31 + ch.charCodeAt(0)) % 360;
     const summary = await api(`/api/orgs/${o.id}/summary`).catch(() => ({ counts: {} }));
     const counts = summary.counts || {};
-    const sections = ORG.filter((t) => t.id !== "overzicht");
+    // In the order of the sidebar, without what was hidden from it.
+    const sections = arrangeNav(layoutInForce()).flatMap((g) => g.tabs);
 
     // Dates only earn their keep if they come and find you.
     const due = await Items.expiring(o.id).catch(() => []);
@@ -677,6 +806,7 @@
     searchScope();
     if (state.tab === "zoeken") { await searchView(); return; }
     if (state.tab === "instellingen") { await settingsView(); return; }
+    if (state.tab === "zijbalk" && state.org) { mySidebarView(); return; }
     const tab = tabsHere().find((t) => t.id === state.tab) || tabsHere()[0];
     state.tab = tab.id;
     $("page-title").textContent = state.org && tab.id === "overzicht" ? state.org.name : tab.title;
@@ -1000,6 +1130,7 @@
     state.me = await api("/api/me");
     state.orgs = await api("/api/orgs");
     KINDS = await rebuildSections();
+    state.sidebar = await api("/api/sidebar").catch(() => ({}));
     await reloadConfig();
     wireSearch();
     const name = state.me.display_name || state.me.email.split("@")[0];

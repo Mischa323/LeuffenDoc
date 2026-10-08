@@ -1633,6 +1633,87 @@ def ui_config(user: dict = Depends(auth.current_user)):
     return settings.public()
 
 
+# --------------------------------------------------------------------------- #
+# The sidebar inside a customer: laid out for everyone by an administrator,
+# and by each person for themselves on top of that.
+#
+# A layout is groups -- a name (empty: no heading) and the sections under it,
+# in order -- and the sections hidden. Which sections exist is the page's to
+# know (types of your own come and go); the server keeps the shape sound and
+# the page leaves out what it does not know, and puts what the layout does not
+# mention in its usual group, so nothing ever disappears from the sidebar.
+# --------------------------------------------------------------------------- #
+SIDEBAR_KEY = "SIDEBAR_LAYOUT"
+_SECTION_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+
+def _clean_sidebar(body: dict) -> dict:
+    groups, seen = [], set()
+    for raw in (body or {}).get("groups") or []:
+        if not isinstance(raw, dict):
+            continue
+        gid = str(raw.get("id") or "").strip()[:40] or f"g{len(groups) + 1}"
+        if not _SECTION_ID.match(gid):
+            raise HTTPException(status_code=400, detail="Een groep heeft een ongeldige sleutel")
+        sections = []
+        for sid in raw.get("sections") or []:
+            sid = str(sid)
+            if _SECTION_ID.match(sid) and sid not in seen:
+                seen.add(sid)
+                sections.append(sid)
+        groups.append({"id": gid, "label": str(raw.get("label") or "").strip()[:40], "sections": sections[:100]})
+    if len(groups) > 20:
+        raise HTTPException(status_code=400, detail="Hoogstens 20 groepen")
+    hidden = [str(s) for s in (body or {}).get("hidden") or [] if _SECTION_ID.match(str(s)) and str(s) not in seen]
+    return {"groups": groups, "hidden": hidden[:100]}
+
+
+def _stored_layout(raw: str | None) -> dict | None:
+    try:
+        return json.loads(raw) if raw else None
+    except ValueError:
+        return None
+
+
+@app.get("/api/sidebar")
+def sidebar_layouts(user: dict = Depends(auth.current_user)):
+    """The layout for everyone, and this person's own (null when they have
+    none or nobody set one)."""
+    return {"default": _stored_layout(database.get_setting(SIDEBAR_KEY)),
+            "mine": _stored_layout(database.get_pref(user["email"], SIDEBAR_KEY))}
+
+
+@app.put("/api/sidebar/mine")
+async def save_my_sidebar(request: Request, user: dict = Depends(auth.current_user)):
+    layout = _clean_sidebar(await request.json())
+    database.set_pref(user["email"], SIDEBAR_KEY, json.dumps(layout))
+    return layout
+
+
+@app.delete("/api/sidebar/mine")
+def reset_my_sidebar(user: dict = Depends(auth.current_user)):
+    database.set_pref(user["email"], SIDEBAR_KEY, None)
+    return {"ok": True}
+
+
+@app.put("/api/sidebar/default")
+async def save_default_sidebar(request: Request, user: dict = Depends(auth.current_user)):
+    auth.require_admin(user)
+    layout = _clean_sidebar(await request.json())
+    database.set_setting(SIDEBAR_KEY, json.dumps(layout))
+    database.audit("sidebar.default", user_email=user["email"], ip=auth.client_ip(request))
+    return layout
+
+
+@app.delete("/api/sidebar/default")
+def reset_default_sidebar(request: Request, user: dict = Depends(auth.current_user)):
+    auth.require_admin(user)
+    database.set_setting(SIDEBAR_KEY, None)
+    database.audit("sidebar.default", user_email=user["email"], detail="terug naar wat LeuffenDoc meebrengt",
+                   ip=auth.client_ip(request))
+    return {"ok": True}
+
+
 def _environment() -> dict:
     """What only the container decides, for display: the development sign-in,
     and administrators it was started with on top of the chosen ones."""
