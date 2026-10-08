@@ -341,6 +341,28 @@
     .rc-to { font-weight: 550; }
     .rc-said { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
 
+    /* ---- tables in a field: NAT, firewall rules ---- */
+    .tview { padding: 4px 18px 14px; }
+    .tview + .tview { border-top: 1px solid var(--border-soft); padding-top: 12px; }
+    .tview-head { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text-dim);
+                  margin: 6px 0 8px; }
+    .tview-head .n { font-size: 11px; color: var(--text-faint); background: var(--surface-2);
+                     padding: 1px 7px; border-radius: 99px; }
+    .tview-scroll { overflow-x: auto; }
+    .tview-table, .tf-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    .tview-table th, .tf-table th { text-align: left; font-weight: 600; font-size: 11px; color: var(--text-faint);
+                                    text-transform: uppercase; letter-spacing: .04em; padding: 6px 8px;
+                                    border-bottom: 1px solid var(--border); white-space: nowrap; }
+    .tview-table td { padding: 7px 8px; border-bottom: 1px solid var(--border-soft); white-space: nowrap; }
+    .tview-table td:first-child { font-weight: 550; white-space: normal; }
+    .tview-table tr:last-child td { border-bottom: 0; }
+    .tf-table td { padding: 3px 4px 3px 0; }
+    .tf-table td .inp { min-width: 90px; height: 32px; }
+    .tf-table td:first-child .inp { min-width: 160px; }
+    .tf-table td:last-child { width: 1%; }
+    .tfield .tf-add { margin-top: 6px; }
+    .form-body .frow.wide { grid-column: 1 / -1; }
+
     /* ---- what runs out soon ---- */
     .due-list { margin-top: 8px; display: grid; gap: 5px; }
     .due-row { display: flex; align-items: center; gap: 10px; cursor: pointer;
@@ -596,6 +618,12 @@
     /* ---- configuration types under their section in the sidebar ---- */
     .nav button.nav-sub { padding-left: 34px; font-size: 12.5px; min-height: 30px; }
     .nav button.nav-sub svg { width: 14px; height: 14px; }
+    .nav button .nav-fold { display: inline-flex; margin: -3px -4px -3px 2px; padding: 3px; border-radius: 5px;
+                            color: var(--text-faint); }
+    .nav button .nav-fold:hover { background: var(--surface-2); color: var(--text); }
+    .nav button .nav-fold svg { width: 14px; height: 14px; opacity: 1; transition: transform .15s; }
+    .nav button .nav-fold.folded svg { transform: rotate(-90deg); }
+    .nav button .nav-fold.hidden { display: none; }
     .tc-subs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
     .tc-subs .tag svg { width: 11px; height: 11px; margin-right: 4px; }
 

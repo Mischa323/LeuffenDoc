@@ -31,6 +31,8 @@ window.DocTypes = function (ctx) {
     mac: "MAC-adres", list: "Meerdere waarden", secret: "Wachtwoord (versleuteld)",
     ref: "Verwijzing naar iets anders",
   };
+  // What only the built-in types have, named but not offered for new fields.
+  const BUILT_IN_NAMES = { table: "Tabel" };
 
   let catalogue = null;       // what /api/types last said
   let draft = null;           // the type being laid out, or null
@@ -183,7 +185,7 @@ window.DocTypes = function (ctx) {
             <input class="inp" data-f="label" value="${esc(f.label || "")}" placeholder="bijv. Tenant-id" /></div>
           <div class="frow"><label>Soort</label>
             ${f.base
-              ? `<div class="rmm-val">${esc(TYPE_NAMES[f.type] || f.type)}${f.rmm ? " — uit de RMM" : ""}</div>`
+              ? `<div class="rmm-val">${esc(TYPE_NAMES[f.type] || BUILT_IN_NAMES[f.type] || f.type)}${f.rmm ? " — uit de RMM" : ""}</div>`
               : `<select class="inp" data-f="type">${Object.entries(TYPE_NAMES).map(([id, name]) =>
                   `<option value="${id}"${id === f.type ? " selected" : ""}>${esc(name)}</option>`).join("")}</select>`}</div>
           ${extra}

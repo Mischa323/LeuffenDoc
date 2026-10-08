@@ -62,10 +62,30 @@
       sub: "Kasten en wat erin hangt, zoals het er echt uitziet", kinds: ["rack"],
       example: "Serverkast kelder",
       empty: "Een kast met zijn hoogte in U. Op zijn pagina sleep je de switches, servers, patchpanelen en de rest erin, op de hoogte waar ze hangen." },
+    { id: "netwerken", label: "Netwerken", icon: "nodes", title: "Netwerken",
+      sub: "Subnetten en VLAN's, met hun gateway en DHCP", kinds: ["subnet"],
+      example: "Kantoor LAN of Gasten-wifi",
+      empty: "Elk netwerk met zijn adresbereik, VLAN, gateway, DNS en wie de adressen uitdeelt — en de vaste adressen." },
+    { id: "vpn", label: "VPN", icon: "shieldCheck", title: "VPN",
+      sub: "Site-to-site en thuiswerkers", kinds: ["vpn"],
+      example: "VPN naar vestiging Venlo",
+      empty: "Welke VPN's er zijn, op welk apparaat, wat er aan beide kanten zit en de instellingen die moeten kloppen. De pre-shared key gaat versleuteld de kluis in." },
     { id: "internet", label: "Internetverbindingen", icon: "globe", title: "Internetverbindingen",
       sub: "Lijnen, contracten en storingsnummers", kinds: ["internet"],
       example: "KPN glasvezel hoofdkantoor",
       empty: "Provider, snelheid, vast IP-blok, contract en wie je belt als de lijn eruit ligt." },
+    { id: "applicaties", label: "Applicaties", icon: "package", title: "Applicaties",
+      sub: "De software waar de klant op draait", kinds: ["application"],
+      example: "Exact Online of AFAS",
+      empty: "Boekhouding, ERP, branchepakketten: waar ze draaien, wie ze levert, hoe je ze installeert en bijwerkt." },
+    { id: "licenties", label: "Licenties", icon: "clipboard", title: "Licenties",
+      sub: "Wat er gekocht is, hoeveel, en tot wanneer", kinds: ["license"],
+      example: "Microsoft 365 Business Premium",
+      empty: "Licenties met hun aantal, de sleutel (versleuteld) en wanneer ze verlopen of verlengen — dat zie je aankomen." },
+    { id: "toeleveranciers", label: "Toeleveranciers", icon: "phone", title: "Toeleveranciers",
+      sub: "Wie je belt, met welk klantnummer", kinds: ["vendor"],
+      example: "Exact, KPN of de printerleverancier",
+      empty: "Leveranciers met hun klantnummer, supportnummer, portaal en contract. Applicaties en licenties wijzen ernaar." },
     { id: "locaties", label: "Locaties", icon: "building", title: "Locaties",
       sub: "Vestigingen en panden", kinds: ["location"], example: "Hoofdkantoor",
       empty: "Panden met hun adres en hoe je er binnenkomt. Apparatuur wijst hiernaar." },
@@ -233,19 +253,46 @@
     return `<span class="oc-mark" style="background:hsl(${h} 55% 45%)${big ? ";width:46px;height:46px;font-size:17px" : ""}">${esc(initials)}${badge}</span>`;
   }
 
+  /* A section's types (Routers, Switches, Desktops …) can be folded away under
+     it, for whoever would rather have a short sidebar; remembered in this
+     browser, and open without it. */
+  let folded = new Set();
+  try { folded = new Set(JSON.parse(localStorage.getItem("leuffendoc-folded") || "[]")); } catch (e) { /* open */ }
+
+  function toggleFold(id) {
+    if (folded.has(id)) folded.delete(id); else folded.add(id);
+    try { localStorage.setItem("leuffendoc-folded", JSON.stringify([...folded])); } catch (e) { /* not kept */ }
+    const subs = $("nav").querySelector(`[data-subs="${id}"]`);
+    const fold = $("nav").querySelector(`[data-fold="${id}"]`);
+    if (subs) subs.classList.toggle("hidden", folded.has(id));
+    if (fold) {
+      fold.classList.toggle("folded", folded.has(id));
+      fold.title = folded.has(id) ? "Soorten tonen" : "Soorten inklappen";
+      fold.setAttribute("aria-expanded", String(!folded.has(id)));
+    }
+  }
+
   function renderNav() {
     $("nav-label").textContent = state.org ? "Deze klant" : "Overzicht";
-    $("nav").innerHTML = tabsHere().map((t) =>
-      `<button data-tab="${t.id}"${t.id === state.tab ? ' class="active"' : ""}>
+    $("nav").innerHTML = tabsHere().map((t) => {
+      const subs = state.org && Items.subtypesOf(t.kinds).length;
+      const shut = folded.has(t.id);
+      return `<button data-tab="${t.id}"${t.id === state.tab ? ' class="active"' : ""}>
          ${ICON[t.icon]} ${t.label}${t.id === "klanten" ? `<span class="count">${state.orgs.length}</span>`
            : state.org && t.kinds ? `<span class="count" data-count="${t.id}"></span>` : ""}
-       </button>${state.org && Items.subtypesOf(t.kinds).length ? `<div class="nav-subs" data-subs="${t.id}"></div>` : ""}`).join("")
+         ${subs ? `<span class="nav-fold hidden${shut ? " folded" : ""}" data-fold="${t.id}" role="button"
+             aria-expanded="${!shut}" title="${shut ? "Soorten tonen" : "Soorten inklappen"}">${ICON.chevD}</span>` : ""}
+       </button>${subs ? `<div class="nav-subs${shut ? " hidden" : ""}" data-subs="${t.id}"></div>` : ""}`;
+    }).join("")
       + (state.org ? `<button data-back="1" style="margin-top:10px">
            <span class="back-ico">${ICON.chevR}</span> Alle klanten</button>` : "");
     $("nav").querySelectorAll("button").forEach((b) => {
-      b.onclick = () => go(b.dataset.back ? "#/klanten"
-                                          : (state.org ? `#/klant/${state.org.id}/${b.dataset.tab}`
-                                                       : `#/${b.dataset.tab}`));
+      b.onclick = (ev) => {
+        const fold = ev.target.closest("[data-fold]");
+        if (fold) { toggleFold(fold.dataset.fold); return; }
+        go(b.dataset.back ? "#/klanten"
+                          : (state.org ? `#/klant/${state.org.id}/${b.dataset.tab}` : `#/${b.dataset.tab}`));
+      };
     });
     if (state.org) fillCounts(state.org.id);
   }
@@ -274,6 +321,9 @@
       slot.querySelectorAll("button").forEach((b) => {
         b.onclick = () => go(`#/klant/${orgId}/${tab.id}?type=${b.dataset.type}`);
       });
+      // Only something to fold when this customer has types there.
+      const fold = $("nav").querySelector(`[data-fold="${tab.id}"]`);
+      if (fold) fold.classList.toggle("hidden", !slot.children.length);
     });
   }
 

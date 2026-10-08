@@ -633,12 +633,20 @@ def _plain(value) -> str:
         return "ja" if value else "nee"
     if isinstance(value, list):
         # A list of labelled values reads as "Werk: 06-… , Mobiel: 06-…"
-        # rather than as the JSON it is stored as.
-        return ", ".join(
-            f"{e.get('label')}: {e.get('value')}" if isinstance(e, dict) and e.get("label")
-            else str(e.get("value") if isinstance(e, dict) else e)
-            for e in value)
+        # rather than as the JSON it is stored as; the rows of a table as
+        # "Webserver · TCP · 443; Mail · TCP · 25".
+        table = any(isinstance(e, dict) and "value" not in e for e in value)
+        return ("; " if table else ", ").join(entry_text(e) for e in value)
     return str(value)
+
+
+def entry_text(entry) -> str:
+    """One entry of a list or a row of a table, as it reads."""
+    if not isinstance(entry, dict):
+        return str(entry)
+    if "value" in entry:
+        return f"{entry['label']}: {entry['value']}" if entry.get("label") else str(entry["value"])
+    return " · ".join(str(v) for v in entry.values() if v)
 
 
 def _diff(before: dict, after: dict, label) -> list:

@@ -111,6 +111,9 @@ def _text(field: dict, value, by_id: dict, shown: set) -> tuple[str | None, dict
         lines = [f"{e.get('label')}: {e.get('value')}" if e.get("label") else str(e.get("value"))
                  for e in value if isinstance(e, dict) and e.get("value")]
         return ("\n".join(lines) or None), {}
+    if kind == "table":
+        lines = [database.entry_text(e) for e in value if isinstance(e, dict)]
+        return ("\n".join(lines) or None), {}
     return str(value), {}
 
 

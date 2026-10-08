@@ -60,6 +60,12 @@ def text(field: dict, value, names: dict) -> str:
     if kind == "list":
         return "\n".join(f"{e.get('label')}: {e.get('value')}" if e.get("label") else str(e.get("value"))
                          for e in value if isinstance(e, dict) and e.get("value"))
+    if kind == "table":
+        # A heading line, then a row a line, every cell in its column.
+        columns = field.get("columns") or []
+        rows = [" · ".join(str(e.get(c["key"]) or "–") for c in columns)
+                for e in value if isinstance(e, dict)]
+        return "\n".join([" · ".join(c["label"] for c in columns), *rows]) if rows else ""
     return str(value)
 
 
@@ -97,7 +103,7 @@ def gather(org: dict, hidden: set, with_passwords: bool) -> tuple[dict, list]:
             if shown:
                 fields.append({"key": key, "label": field["label"], "value": shown, "raw": value,
                                "from_rmm": bool(field.get("rmm")) and field["rmm"] in held,
-                               "multiline": field["type"] in ("textarea", "long", "list")})
+                               "multiline": field["type"] in ("textarea", "long", "list", "table")})
         record = {
             "id": item["id"], "kind": item["kind"], "kind_label": spec.get("label", item["kind"]),
             "name": item["name"], "archived": item["archived"], "from_rmm": item.get("source") == "rmm",

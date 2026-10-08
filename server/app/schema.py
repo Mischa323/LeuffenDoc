@@ -47,6 +47,12 @@ def _f(key, label, type="text", **extra):
     return {"key": key, "label": label, "type": type, **extra}
 
 
+# The kinds of network device a field is about (``roles``): the form offers it
+# only there. What the edge of a network does -- NAT, firewall rules -- a
+# switch or an access point does not.
+_EDGE = ["Router", "Firewall", "Modem"]
+
+
 def _rack_fields() -> list:
     return [
         _f("rackmount", "Formaat", "select", options=RACK_FORMS, icon="rack",
@@ -130,6 +136,25 @@ NETWORK = {
             _f("firmware", "Firmware", icon="package", rmm="firmware"),
             _f("mgmt_ip", "Beheeradres", "ip", icon="globe", rmm="mgmt_ip"),
             *_rack_fields(),
+        ]},
+        # What is open to the outside, and what may go where: a table each,
+        # on the router or firewall it is set on.
+        {"key": "firewall", "label": "Firewall en NAT", "fields": [
+            _f("nat", "Poortdoorverwijzingen (NAT)", "table", long=True, roles=_EDGE, icon="external",
+               columns=[{"key": "name", "label": "Omschrijving"},
+                        {"key": "proto", "label": "Protocol", "options": ["TCP", "UDP", "TCP+UDP"]},
+                        {"key": "ext", "label": "Poort buiten"},
+                        {"key": "to", "label": "Naar adres"},
+                        {"key": "to_port", "label": "Poort binnen"},
+                        {"key": "source", "label": "Alleen vanaf"}],
+               hint="Wat van buitenaf bereikbaar is. Leeg bij Alleen vanaf: voor iedereen."),
+            _f("rules", "Firewallregels", "table", long=True, roles=_EDGE, icon="shield",
+               columns=[{"key": "name", "label": "Omschrijving"},
+                        {"key": "action", "label": "Actie", "options": ["Toestaan", "Blokkeren"]},
+                        {"key": "source", "label": "Van"},
+                        {"key": "dest", "label": "Naar"},
+                        {"key": "service", "label": "Poort of dienst"}],
+               hint="De regels die ertoe doen — niet de standaard die elke firewall heeft."),
         ]},
         {"key": "beheer", "label": "Beheer", "fields": [
             _f("installed_at", "Geïnstalleerd op", "date"),
@@ -218,6 +243,81 @@ INTERNET = {
     ],
 }
 
+# A network inside the customer: the office LAN, the guest wifi, the cameras'
+# VLAN. Its address range, its gateway and how addresses are handed out --
+# what you want in front of you before you plug anything in.
+SUBNET = {
+    "label": "Netwerk",
+    "plural": "Netwerken",
+    "icon": "nodes",
+    "family": "onderdeel",
+    "sub": "Subnetten en VLAN's, met hun gateway en DHCP",
+    "backref": "Wat hiernaar verwijst",
+    "columns": ["network", "vlan", "purpose", "dhcp"],
+    "groups": [
+        {"key": "netwerk", "label": "Het netwerk", "width": "half", "fields": [
+            _f("network", "Netwerkadres", icon="nodes", hint="Met het subnet: 192.168.10.0/24."),
+            _f("vlan", "VLAN", "number", hint="Het VLAN-nummer; leeg voor het netwerk zonder VLAN."),
+            _f("purpose", "Waarvoor", "select",
+               options=["Kantoor", "Servers", "Beheer", "Gasten", "VoIP", "Camera's", "IoT", "DMZ", "Overig"]),
+            _f("gateway", "Gateway", "ip", icon="globe"),
+            _f("gateway_device", "Gateway-apparaat", "ref", ref="network",
+               hint="De router of firewall die dit netwerk routeert."),
+            _f("dns", "DNS-servers", hint="Bijvoorbeeld 192.168.10.1, 1.1.1.1."),
+            _f("location", "Locatie", "ref", ref="location"),
+        ]},
+        {"key": "dhcp", "label": "DHCP", "width": "half", "fields": [
+            _f("dhcp", "DHCP", "select", options=["Aan", "Uit", "Via een relay"]),
+            _f("dhcp_server", "DHCP-server", "ref", ref="configuratie",
+               hint="Het apparaat dat de adressen uitdeelt: de firewall, of een server."),
+            _f("dhcp_range", "Bereik", hint="Van–tot: 192.168.10.100 – 192.168.10.200."),
+            _f("lease", "Leasetijd", hint="Bijvoorbeeld 8 uur of 1 dag."),
+            _f("reservations", "Vaste adressen", "list", icon="nodes", labels=[],
+               hint="Per apparaat zijn vaste adres: zet de naam of het MAC-adres ervoor."),
+        ]},
+        {"key": "over", "label": "Over", "fields": [
+            _f("notes", "Notities", "textarea"),
+        ]},
+    ],
+}
+
+# A VPN: offices tied together, or people working from home. What it runs on,
+# what is on either side, and the settings that have to match at both ends.
+VPN = {
+    "label": "VPN",
+    "plural": "VPN's",
+    "icon": "shieldCheck",
+    "family": "onderdeel",
+    "sub": "Site-to-site-verbindingen en VPN voor thuiswerkers",
+    "backref": "Wat hiernaar verwijst",
+    "columns": ["vpn_type", "protocol", "device", "peer"],
+    "groups": [
+        {"key": "wat", "label": "De verbinding", "width": "half", "fields": [
+            _f("vpn_type", "Soort", "select", options=["Site-to-site", "Thuiswerkers (client)"]),
+            _f("protocol", "Protocol", "select",
+               options=["IPsec", "WireGuard", "OpenVPN", "SSL VPN", "L2TP", "Anders"]),
+            _f("device", "Op apparaat", "ref", ref="network", icon="shield",
+               hint="De firewall of router waarop de VPN eindigt."),
+            _f("peer", "Andere kant", icon="globe",
+               hint="Het adres of de naam van de andere kant, of wie het is (het datacenter, de vestiging)."),
+            _f("local_nets", "Netwerken hier", hint="Wat via de VPN bereikbaar is: 192.168.10.0/24."),
+            _f("remote_nets", "Netwerken aan de andere kant"),
+        ]},
+        {"key": "instellingen", "label": "Instellingen", "width": "half", "fields": [
+            _f("psk", "Pre-shared key", "secret",
+               hint="Versleuteld bewaard, zoals een wachtwoord in de kluis."),
+            _f("settings", "Fase 1 en 2", "textarea",
+               hint="Versleuteling, hash, DH-groep, levensduur — wat aan beide kanten gelijk moet zijn."),
+            _f("users", "Wie mag verbinden", hint="Bij thuiswerkers: de groep of de gebruikers."),
+            _f("client_url", "Client en configuratie", icon="download",
+               hint="Waar de client of het configuratiebestand te vinden is."),
+        ]},
+        {"key": "over", "label": "Over", "fields": [
+            _f("notes", "Notities", "textarea"),
+        ]},
+    ],
+}
+
 LOCATION = {
     "label": "Locatie",
     "plural": "Locaties",
@@ -290,6 +390,115 @@ CONTACT = {
         ]},
         {"key": "over", "label": "Over", "fields": [
             _f("location", "Locatie", "ref", ref="location"),
+            _f("notes", "Notities", "textarea"),
+        ]},
+    ],
+}
+
+# --------------------------------------------------------------------------- #
+# Software and who it comes from
+#
+# The applications a customer runs its business on, the licences it pays for,
+# and the suppliers behind them -- who you call when the accounting package
+# will not start, and when the licence for it runs out.
+# --------------------------------------------------------------------------- #
+APPLICATION = {
+    "label": "Applicatie",
+    "plural": "Applicaties",
+    "icon": "package",
+    "family": "onderdeel",
+    "sub": "De software waar de klant op draait: boekhouding, ERP, branchepakketten",
+    "backref": "Wat hiernaar verwijst",
+    "columns": ["category", "version", "vendor", "runs_on"],
+    "groups": [
+        {"key": "wat", "label": "Wat het is", "width": "half", "fields": [
+            _f("category", "Soort", "select",
+               options=["Boekhouding", "ERP", "CRM", "Branchesoftware", "Kassasysteem", "Planning",
+                        "Tekenen en ontwerp", "Database", "Overig"]),
+            _f("purpose", "Waar het voor dient", "textarea"),
+            _f("vendor", "Leverancier", "ref", ref="vendor", icon="box"),
+            _f("version", "Versie", icon="package"),
+            _f("owner", "Beheerder bij de klant", "ref", ref="contact", icon="user",
+               hint="Wie bij de klant over deze applicatie gaat."),
+            _f("users", "Wie het gebruikt", hint="Bijvoorbeeld: de administratie, 5 gebruikers."),
+        ]},
+        {"key": "techniek", "label": "Waar en hoe", "width": "half", "fields": [
+            _f("runs_on", "Draait op", "ref", ref="configuratie", icon="server",
+               hint="De server waarop het staat; leeg bij een webapplicatie."),
+            _f("database", "Database", hint="Bijvoorbeeld SQL Server 2019 op SRV-01."),
+            _f("url", "Adres", icon="globe", hint="Waar je inlogt, bij een webapplicatie."),
+            _f("install", "Installeren", "textarea",
+               hint="Waar de installatie staat en wat er bij een nieuwe werkplek moet gebeuren."),
+            _f("updates", "Bijwerken", "textarea", hint="Wie de updates doet, en hoe."),
+            _f("backup", "Back-up", hint="Hoe de gegevens worden veiliggesteld."),
+        ]},
+        {"key": "over", "label": "Over", "fields": [
+            _f("notes", "Notities", "textarea"),
+        ]},
+    ],
+}
+
+LICENSE = {
+    "label": "Licentie",
+    "plural": "Licenties",
+    "icon": "clipboard",
+    "family": "onderdeel",
+    "sub": "Wat de klant aan software heeft gekocht, hoeveel, en tot wanneer",
+    "backref": "Wat hiernaar verwijst",
+    "columns": ["product", "seats", "vendor", "expires_at"],
+    "groups": [
+        {"key": "wat", "label": "Wat", "width": "half", "fields": [
+            _f("product", "Product", icon="package",
+               hint="Bijvoorbeeld Microsoft 365 Business Premium of AutoCAD LT."),
+            _f("license_type", "Soort", "select",
+               options=["Abonnement", "Eeuwigdurend", "Volumelicentie", "OEM", "Proef"]),
+            _f("seats", "Aantal", "number", hint="Hoeveel gebruikers of apparaten."),
+            _f("seats_used", "In gebruik", "number"),
+            _f("vendor", "Gekocht bij", "ref", ref="vendor", icon="box"),
+            _f("license_key", "Licentiesleutel", "secret",
+               hint="Versleuteld bewaard, zoals een wachtwoord in de kluis."),
+        ]},
+        {"key": "looptijd", "label": "Looptijd", "width": "half", "fields": [
+            _f("purchased_at", "Gekocht op", "date"),
+            _f("expires_at", "Verloopt op", "date", expiry=True,
+               hint="Of verlengt op: dan zie je het aankomen."),
+            _f("auto_renew", "Verlengt vanzelf", "bool"),
+            _f("order_number", "Order- of contractnummer"),
+            _f("cost", "Kosten", icon="euro", hint="Bijvoorbeeld € 22 per gebruiker per maand."),
+        ]},
+        {"key": "over", "label": "Over", "fields": [
+            _f("notes", "Notities", "textarea"),
+        ]},
+    ],
+}
+
+VENDOR = {
+    "label": "Toeleverancier",
+    "plural": "Toeleveranciers",
+    "icon": "phone",
+    "family": "onderdeel",
+    "sub": "Leveranciers en hun support: wie je belt, met welk klantnummer",
+    "backref": "Wat van deze leverancier komt",
+    "columns": ["category", "account_number", "support_phone", "contract_until"],
+    "groups": [
+        {"key": "wie", "label": "Wie", "width": "half", "fields": [
+            _f("category", "Soort", "select",
+               options=["Internetprovider", "Hardware", "Software", "Telefonie", "Printers en kopiëren",
+                        "Beveiliging", "Hosting en cloud", "Installateur", "Overig"]),
+            _f("website", "Website", icon="globe"),
+            _f("portal", "Klantportaal", icon="external", hint="Waar je inlogt om tickets of orders te zien."),
+            _f("account_number", "Klantnummer", icon="clipboard",
+               hint="Het nummer waaronder deze klant daar bekend is."),
+            _f("account_manager", "Accountmanager", icon="user"),
+        ]},
+        {"key": "support", "label": "Support", "width": "half", "fields": [
+            _f("support_phone", "Telefoon", icon="phone"),
+            _f("support_email", "E-mail", icon="mail"),
+            _f("support_hours", "Bereikbaar"),
+            _f("contract_until", "Contract tot", "date", expiry=True),
+            _f("sla", "Afspraken", "textarea", hint="Reactietijden, wat onder het contract valt."),
+        ]},
+        {"key": "over", "label": "Over", "fields": [
             _f("notes", "Notities", "textarea"),
         ]},
     ],
@@ -401,6 +610,11 @@ BUILT_IN: dict[str, dict] = {
     "printer": PRINTER,
     "internet": INTERNET,
     "rack": RACK,
+    "subnet": SUBNET,
+    "vpn": VPN,
+    "application": APPLICATION,
+    "license": LICENSE,
+    "vendor": VENDOR,
     "location": LOCATION,
     "contact": CONTACT,
     "password": PASSWORD,
@@ -637,6 +851,20 @@ def clean(name: str, values: dict, held: set | frozenset = frozenset()) -> dict:
         if spec["type"] == "secret":
             continue
         if value is None:
+            continue
+        if spec["type"] == "table":
+            # Rows of the columns the field names, each cell plain text; a row
+            # with nothing in it is not a row.
+            columns = [c["key"] for c in spec.get("columns") or []]
+            rows = []
+            for entry in (value if isinstance(value, list) else []):
+                if not isinstance(entry, dict):
+                    continue
+                row = {c: str(entry.get(c) or "").strip()[:200] for c in columns}
+                if any(row.values()):
+                    rows.append({c: v for c, v in row.items() if v})
+            if rows:
+                out[key] = rows[:250]
             continue
         if spec["type"] == "list":
             rows = []

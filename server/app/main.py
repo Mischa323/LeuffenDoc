@@ -1275,7 +1275,8 @@ def search(q: str = "", org: str = "", user: dict = Depends(auth.current_user)):
             if needle in item["name"].lower():
                 hits.append({"where": "Naam", "text": item["name"]})
             for key, value in item["fields"].items():
-                text = str(value)
+                # A list or a table as it reads, not as it is stored.
+                text = database._plain(value) if isinstance(value, list) else str(value)
                 if needle in text.lower():
                     hits.append({"where": schema.label_of(item["kind"], key),
                                  "text": _snippet(text, needle)})

@@ -121,7 +121,42 @@ window.DocItems = function (ctx) {
       return (Array.isArray(raw) ? raw : [])
         .map((e) => (e.label ? `${e.label}: ${e.value}` : e.value)).join(" · ");
     }
+    if (field.type === "table") {
+      const n = Array.isArray(raw) ? raw.length : 0;
+      return n ? `${n} ${n === 1 ? "regel" : "regels"}` : "";
+    }
     return String(raw);
+  }
+
+  /* A table on the page: what a firewall forwards, its rules -- under the
+     field's name, a row a line, scrolling sideways on a narrow screen rather
+     than squeezing the columns. */
+  function tableHtml(field, value) {
+    const rows = Array.isArray(value) ? value : [];
+    const cols = field.columns || [];
+    if (!rows.length || !cols.length) return "";
+    return `<div class="tview" data-table="${esc(field.key)}">
+        <div class="tview-head">${field.icon && ICON[field.icon] ? `<span class="dt-ic">${ICON[field.icon]}</span>` : ""}
+          <span>${esc(field.label)}</span><span class="n">${rows.length}</span></div>
+        <div class="tview-scroll"><table class="tview-table">
+          <thead><tr>${cols.map((c) => `<th>${esc(c.label)}</th>`).join("")}</tr></thead>
+          <tbody>${rows.map((r) => `<tr>${cols.map((c, i) => `<td${i ? ' class="mono"' : ""}>${esc(r[c.key] || "")}</td>`).join("")}</tr>`).join("")}</tbody>
+        </table></div>
+      </div>`;
+  }
+
+  // One row of a table in a form; a column with choices is a drop-down.
+  function tableRow(field, row) {
+    const r = row || {};
+    return `<tr>${(field.columns || []).map((c) => {
+      const v = r[c.key] || "";
+      if (c.options) {
+        const options = c.options.includes(v) || !v ? c.options : [...c.options, v];
+        return `<td><select class="inp" data-tc="${esc(c.key)}"><option value=""></option>${options.map((o) =>
+          `<option${o === v ? " selected" : ""}>${esc(o)}</option>`).join("")}</select></td>`;
+      }
+      return `<td><input class="inp" data-tc="${esc(c.key)}" value="${esc(v)}" /></td>`;
+    }).join("")}<td><button type="button" class="btn ghost sm tf-drop" title="Regel weghalen">${ICON.trash}</button></td></tr>`;
   }
 
   /* A date that has run out, or is about to. Sixty days is roughly the notice
@@ -166,6 +201,16 @@ window.DocItems = function (ctx) {
           <datalist id="${listId}">${suggestions.map((o) => `<option value="${esc(o)}"></option>`).join("")}</datalist>
           <div class="lrows">${rows.map((r) => listRow(r, listId)).join("")}</div>
           <button type="button" class="btn ghost sm lf-add">${ICON.plus} Nog een</button>
+        </div>`;
+    }
+    if (field.type === "table") {
+      const rows = Array.isArray(value) && value.length ? value : [{}];
+      return `<div class="tfield" id="${id}" data-key="${field.key}" data-type="table">
+          <div class="tview-scroll"><table class="tf-table">
+            <thead><tr>${(field.columns || []).map((c) => `<th>${esc(c.label)}</th>`).join("")}<th></th></tr></thead>
+            <tbody>${rows.map((r) => tableRow(field, r)).join("")}</tbody>
+          </table></div>
+          <button type="button" class="btn ghost sm tf-add">${ICON.plus} Regel toevoegen</button>
         </div>`;
     }
     if (field.type === "secret") {
@@ -239,6 +284,51 @@ window.DocItems = function (ctx) {
         rows.lastElementChild.querySelector(".lf-label").focus();
       };
     });
+
+    // Tables: a new row is an empty copy of the first; the last one is
+    // emptied rather than removed, so there is always a line to type on.
+    root.querySelectorAll(".tfield").forEach((field) => {
+      const body = field.querySelector("tbody");
+      const blank = () => {
+        const tr = body.rows[0].cloneNode(true);
+        tr.querySelectorAll("[data-tc]").forEach((c) => { c.value = ""; });
+        return tr;
+      };
+      const wire = (tr) => {
+        tr.querySelector(".tf-drop").onclick = () => {
+          if (body.rows.length === 1) body.appendChild(wire(blank()));
+          tr.remove();
+        };
+        return tr;
+      };
+      [...body.rows].forEach(wire);
+      field.querySelector(".tf-add").onclick = () => {
+        const tr = wire(blank());
+        body.appendChild(tr);
+        tr.querySelector("[data-tc]").focus();
+      };
+    });
+
+    /* A field about some types only -- NAT on a router or firewall -- is
+       offered when the chosen type is one of them, or none is chosen yet;
+       one that already holds something always stays. A block left with
+       nothing to offer goes with it. */
+    const role = root.querySelector('[data-key="role"]');
+    const limited = [...root.querySelectorAll(".frow[data-roles]")];
+    if (limited.length) {
+      const apply = () => {
+        const chosen = role ? role.value : "";
+        limited.forEach((row) => {
+          row.classList.toggle("hidden", !!chosen && !row.dataset.filled
+            && !row.dataset.roles.split("|").includes(chosen));
+        });
+        new Set(limited.map((row) => row.closest(".form-block"))).forEach((block) => {
+          if (block) block.classList.toggle("hidden", ![...block.querySelectorAll(".frow")].some((r) => !r.classList.contains("hidden")));
+        });
+      };
+      if (role) role.addEventListener("change", apply);
+      apply();
+    }
   }
 
   function formHtml(kind, item, all, orgId, prefill) {
@@ -249,12 +339,17 @@ window.DocItems = function (ctx) {
       <div class="panel form-block">
         <div class="panel-head"><h2>${esc(group.label)}</h2></div>
         <div class="form-body">
-          ${fields.map((f) => `<div class="frow">
+          ${fields.map((f) => {
+            const value = item ? valueOf(item, f) : ((prefill || {})[f.key] || "");
+            const filled = Array.isArray(value) ? value.length : value !== "";
+            return `<div class="frow${f.type === "table" ? " wide" : ""}"${f.roles
+              ? ` data-roles="${esc(f.roles.join("|"))}"${filled ? ' data-filled="1"' : ""}` : ""}>
             <label for="f-${f.key}">${f.icon && ICON[f.icon]
               ? `<span class="lb-ic">${ICON[f.icon]}</span>` : ""}${esc(f.label)}</label>
-            ${inputFor(f, item ? valueOf(item, f) : ((prefill || {})[f.key] || ""), all, orgId, held(item, f))}
+            ${inputFor(f, value, all, orgId, held(item, f))}
             ${f.hint ? `<div class="hint">${esc(f.hint)}</div>` : ""}
-          </div>`).join("")}
+          </div>`;
+          }).join("")}
         </div>
       </div>` : "" };
     }));
@@ -263,7 +358,11 @@ window.DocItems = function (ctx) {
   function readForm(root) {
     const fields = {};
     root.querySelectorAll("[data-key]").forEach((el) => {
-      if (el.dataset.type === "list") {
+      if (el.dataset.type === "table") {
+        fields[el.dataset.key] = [...el.querySelectorAll("tbody tr")]
+          .map((tr) => Object.fromEntries([...tr.querySelectorAll("[data-tc]")].map((c) => [c.dataset.tc, c.value.trim()])))
+          .filter((row) => Object.values(row).some(Boolean));
+      } else if (el.dataset.type === "list") {
         fields[el.dataset.key] = [...el.querySelectorAll(".lrow")].map((row) => ({
           label: row.querySelector('[data-lf="label"]').value.trim(),
           value: row.querySelector('[data-lf="value"]').value.trim(),
@@ -361,7 +460,7 @@ window.DocItems = function (ctx) {
         const v = held(i, f) ? (i.rmm || {})[f.rmm] : (i.fields || {})[f.key];
         if (v === undefined || v === null || v === "") continue;
         if (f.type === "ref") parts.push((byId[v] || {}).name || "");
-        else if (Array.isArray(v)) v.forEach((e) => parts.push(e && typeof e === "object" ? `${e.label || ""} ${e.value || ""}` : String(e)));
+        else if (Array.isArray(v)) v.forEach((e) => parts.push(e && typeof e === "object" ? Object.values(e).join(" ") : String(e)));
         else parts.push(String(v));
       }
       return parts.join(" ").toLowerCase();
@@ -626,7 +725,8 @@ window.DocItems = function (ctx) {
       return `<div class="panel">
           <div class="panel-head"><h2>${esc(group.label)}</h2></div>
           ${rows ? `<div class="deflist">${rows}</div>` : ""}
-          ${long.map((f) => `<div class="longtext">${esc(display(item, f, all))}</div>`).join("")}
+          ${long.map((f) => (f.type === "table" ? tableHtml(f, valueOf(item, f))
+            : `<div class="longtext">${esc(display(item, f, all))}</div>`)).join("")}
         </div>`;
     })() }))) || `<div class="panel"><div class="empty">
         <div>Nog niets ingevuld</div>
