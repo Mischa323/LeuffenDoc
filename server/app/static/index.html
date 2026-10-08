@@ -74,7 +74,11 @@
     .deflist .dt, .deflist .dd { padding: 11px 18px; border-bottom: 1px solid var(--border-soft);
                                  font-size: 13px; }
     .deflist .dt { color: var(--text-dim); display: flex; align-items: center; gap: 8px; }
-    .deflist .dd { white-space: pre-wrap; }
+    .deflist .dd { white-space: pre-wrap; min-width: 0; overflow-wrap: anywhere; }
+    /* In a half block the names get a share of the width rather than a fixed
+       210 pixels, and wrap instead of running into the value. */
+    .blocks .panel.half .deflist { grid-template-columns: minmax(0, 44%) minmax(0, 1fr); }
+    .deflist .dt { flex-wrap: wrap; min-width: 0; }
     .deflist .dd a { color: var(--accent); cursor: pointer; }
     .deflist > :nth-last-child(-n+2) { border-bottom: 0; }
     @media (max-width: 720px) { .deflist { grid-template-columns: 1fr; }
@@ -361,6 +365,40 @@
     .tf-table td:first-child .inp { min-width: 160px; }
     .tf-table td:last-child { width: 1%; }
     .tfield .tf-add { margin-top: 6px; }
+    .tview.folded .tv-more { display: none; }
+
+    /* ---- filling many switch ports at once ---- */
+    .ports-bulk { margin: 12px 18px 4px; padding: 12px 14px 4px; border: 1px dashed var(--border);
+                  border-radius: var(--r-md); background: var(--surface-2); }
+    .pb-title { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600;
+                color: var(--text-dim); margin-bottom: 8px; }
+    .pb-title svg { width: 14px; height: 14px; color: var(--accent); }
+    .pb-row { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(160px, 2fr) minmax(80px, 110px) auto;
+              gap: 0 10px; align-items: end; }
+    .pb-row .btn { margin-bottom: 15px; }
+    .pb-copy { grid-template-columns: minmax(200px, 1fr) auto; margin-top: 6px; }
+    .ports-bulk .hint { margin: -6px 0 10px; }
+    .ports-bulk code { font-size: 11.5px; background: var(--surface); padding: 0 4px; border-radius: 4px; }
+    @keyframes pb-flash { from { background: color-mix(in srgb, var(--accent) 22%, transparent); } to { background: transparent; } }
+    .port-edit.pb-filled td { animation: pb-flash 1.2s ease-out; }
+    @media (max-width: 760px) { .pb-row, .pb-copy { grid-template-columns: 1fr; } }
+    .tv-all { display: block; margin: 8px 0 0; padding: 6px 0; border: 0; background: transparent;
+              color: var(--accent); font: inherit; font-size: 12.5px; font-weight: 550; cursor: pointer; }
+    .tview-table a { color: var(--accent); }
+
+    /* ---- Microsoft 365 ---- */
+    #m365 > * { margin-bottom: 14px; }
+    .m365-form { padding: 14px 18px 4px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+                 gap: 0 14px; align-items: end; }
+    .m365-form .btn { margin-bottom: 15px; justify-self: start; }
+    .m365-busy { font-size: 12.5px; color: var(--accent); margin-bottom: 15px; }
+    .m365-how { padding: 0 18px 14px; font-size: 12.5px; color: var(--text-dim); }
+    .m365-how summary { cursor: pointer; color: var(--accent); font-weight: 550; padding: 4px 0; }
+    .m365-how ol, .m365-how ul { margin: 6px 0; padding-left: 20px; line-height: 1.6; }
+    .m365-how code { font-size: 11.5px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+    .m365-note { margin: 12px 18px; }
+    .m365-note ul { margin: 6px 0 0; padding-left: 18px; }
+    .m365-note .m365-how { padding: 6px 0 0; }
     .form-body .frow.wide { grid-column: 1 / -1; }
 
     /* ---- what runs out soon ---- */
@@ -624,6 +662,17 @@
     .nav button .nav-fold svg { width: 14px; height: 14px; opacity: 1; transition: transform .15s; }
     .nav button .nav-fold.folded svg { transform: rotate(-90deg); }
     .nav button .nav-fold.hidden { display: none; }
+    /* Headings in the sidebar, each folding its sections away. */
+    .nav-group { margin-top: 8px; }
+    .nav button.nav-group-head { min-height: 26px; padding: 4px 10px 4px 12px; font-size: 10.5px; font-weight: 650;
+                                 letter-spacing: .07em; text-transform: uppercase; color: var(--text-faint); gap: 6px; }
+    .nav button.nav-group-head:hover { color: var(--text-dim); background: transparent; }
+    .nav button.nav-group-head svg { width: 13px; height: 13px; margin-left: 2px; transition: transform .15s; }
+    .nav-group-n { margin-left: auto; font-size: 10.5px; letter-spacing: 0; font-weight: 500; }
+    .nav-group:not(.folded) .nav-group-n { display: none; }
+    .nav-group:not(.folded) .nav-group-head svg { margin-left: auto; }
+    .nav-group.folded .nav-group-head svg { transform: rotate(-90deg); }
+    .nav-group.folded .nav-group-items { display: none; }
     .tc-subs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
     .tc-subs .tag svg { width: 11px; height: 11px; margin-right: 4px; }
 

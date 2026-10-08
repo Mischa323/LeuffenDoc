@@ -50,53 +50,62 @@
   ];
 
   // Inside a customer. `kinds` names what a section lists; a section without it
-  // is not built yet and says so rather than pretending.
+  // is not built yet and says so rather than pretending. `group` puts it under
+  // a heading in the sidebar.
+  const NAV_GROUPS = {
+    infra: "Infrastructuur", netwerk: "Netwerk", cloud: "Cloud en software",
+    organisatie: "Organisatie", kluis: "Kluis en documenten", eigen: "Eigen types",
+  };
   const ORG = [
     { id: "overzicht", label: "Overzicht", icon: "grid", title: "Overzicht",
       sub: "Wat er van deze klant bekend is" },
-    { id: "configuraties", label: "Configuraties", icon: "desktop", title: "Configuraties",
+    { id: "configuraties", group: "infra", label: "Configuraties", icon: "desktop", title: "Configuraties",
       sub: "De apparatuur van deze klant", kinds: ["computer", "network", "printer"],
       example: "WS-014 of SW-01",
       empty: "Computers, servers, switches, firewalls en printers — met wie ze installeerde en waar ze hangen." },
-    { id: "patchkasten", label: "Patchkasten", icon: "rack", title: "Patchkasten",
+    { id: "patchkasten", group: "infra", label: "Patchkasten", icon: "rack", title: "Patchkasten",
       sub: "Kasten en wat erin hangt, zoals het er echt uitziet", kinds: ["rack"],
       example: "Serverkast kelder",
       empty: "Een kast met zijn hoogte in U. Op zijn pagina sleep je de switches, servers, patchpanelen en de rest erin, op de hoogte waar ze hangen." },
-    { id: "netwerken", label: "Netwerken", icon: "nodes", title: "Netwerken",
+    { id: "netwerken", group: "netwerk", label: "Netwerken", icon: "nodes", title: "Netwerken",
       sub: "Subnetten en VLAN's, met hun gateway en DHCP", kinds: ["subnet"],
       example: "Kantoor LAN of Gasten-wifi",
       empty: "Elk netwerk met zijn adresbereik, VLAN, gateway, DNS en wie de adressen uitdeelt — en de vaste adressen." },
-    { id: "vpn", label: "VPN", icon: "shieldCheck", title: "VPN",
+    { id: "vpn", group: "netwerk", label: "VPN", icon: "shieldCheck", title: "VPN",
       sub: "Site-to-site en thuiswerkers", kinds: ["vpn"],
       example: "VPN naar vestiging Venlo",
       empty: "Welke VPN's er zijn, op welk apparaat, wat er aan beide kanten zit en de instellingen die moeten kloppen. De pre-shared key gaat versleuteld de kluis in." },
-    { id: "internet", label: "Internetverbindingen", icon: "globe", title: "Internetverbindingen",
+    { id: "internet", group: "netwerk", label: "Internetverbindingen", icon: "globe", title: "Internetverbindingen",
       sub: "Lijnen, contracten en storingsnummers", kinds: ["internet"],
       example: "KPN glasvezel hoofdkantoor",
       empty: "Provider, snelheid, vast IP-blok, contract en wie je belt als de lijn eruit ligt." },
-    { id: "applicaties", label: "Applicaties", icon: "package", title: "Applicaties",
+    { id: "microsoft365", group: "cloud", label: "Microsoft 365", icon: "cloud", title: "Microsoft 365",
+      sub: "De tenant: domeinen, abonnementen, gebruikers, mailboxen en groepen", kinds: ["m365"],
+      example: "Tenant van de klant",
+      empty: "De Microsoft 365-tenant van deze klant. Koppel hem met een app-registratie en de domeinen, abonnementen, gebruikers met hun licenties, gedeelde mailboxen, groepen en verlopende app-secrets komen er vanzelf in." },
+    { id: "applicaties", group: "cloud", label: "Applicaties", icon: "package", title: "Applicaties",
       sub: "De software waar de klant op draait", kinds: ["application"],
       example: "Exact Online of AFAS",
       empty: "Boekhouding, ERP, branchepakketten: waar ze draaien, wie ze levert, hoe je ze installeert en bijwerkt." },
-    { id: "licenties", label: "Licenties", icon: "clipboard", title: "Licenties",
+    { id: "licenties", group: "cloud", label: "Licenties", icon: "clipboard", title: "Licenties",
       sub: "Wat er gekocht is, hoeveel, en tot wanneer", kinds: ["license"],
       example: "Microsoft 365 Business Premium",
       empty: "Licenties met hun aantal, de sleutel (versleuteld) en wanneer ze verlopen of verlengen — dat zie je aankomen." },
-    { id: "toeleveranciers", label: "Toeleveranciers", icon: "phone", title: "Toeleveranciers",
+    { id: "toeleveranciers", group: "cloud", label: "Toeleveranciers", icon: "phone", title: "Toeleveranciers",
       sub: "Wie je belt, met welk klantnummer", kinds: ["vendor"],
       example: "Exact, KPN of de printerleverancier",
       empty: "Leveranciers met hun klantnummer, supportnummer, portaal en contract. Applicaties en licenties wijzen ernaar." },
-    { id: "locaties", label: "Locaties", icon: "building", title: "Locaties",
+    { id: "locaties", group: "organisatie", label: "Locaties", icon: "building", title: "Locaties",
       sub: "Vestigingen en panden", kinds: ["location"], example: "Hoofdkantoor",
       empty: "Panden met hun adres en hoe je er binnenkomt. Apparatuur wijst hiernaar." },
-    { id: "contacten", label: "Contactpersonen", icon: "user", title: "Contactpersonen",
+    { id: "contacten", group: "organisatie", label: "Contactpersonen", icon: "user", title: "Contactpersonen",
       sub: "Wie je bij deze klant belt", kinds: ["contact"], example: "Jan de Vries",
       empty: "De mensen bij deze klant, met hun functie en nummer." },
-    { id: "wachtwoorden", label: "Wachtwoorden", icon: "key", title: "Wachtwoorden",
+    { id: "wachtwoorden", group: "kluis", label: "Wachtwoorden", icon: "key", title: "Wachtwoorden",
       sub: "Versleutelde kluis van deze klant", kinds: ["password"],
       example: "Beheerder firewall",
       empty: "Wachtwoorden worden versleuteld opgeslagen en zijn te koppelen aan het apparaat of de lijn waar ze bij horen. Tonen en kopiëren komt altijd in het logboek." },
-    { id: "documenten", label: "Documenten", icon: "file", title: "Documenten",
+    { id: "documenten", group: "kluis", label: "Documenten", icon: "file", title: "Documenten",
       sub: "Procedures en uitleg die niet in velden past", kinds: ["document"],
       example: "Herstart van de terminalserver",
       empty: "Voor wat niet in velden past: procedures, uitleg, hoe je iets herstart om drie uur ’s nachts. Te koppelen aan de apparatuur waar ze over gaan." },
@@ -142,7 +151,7 @@
     for (const [id, spec] of Object.entries(KINDS)) {
       if (!spec.custom) continue;
       ORG.push({
-        id: `t-${id}`, own: true, kinds: [id],
+        id: `t-${id}`, own: true, kinds: [id], group: "eigen",
         label: spec.plural, title: spec.plural, icon: spec.icon,
         sub: spec.sub || `De ${spec.plural.toLowerCase()} van deze klant`,
         example: spec.label,
@@ -272,9 +281,23 @@
     }
   }
 
+  /* Sections under headings -- Infrastructuur, Netwerk, Cloud en software …
+     -- each of which folds away; the one you are in always shows. */
+  function toggleGroup(group) {
+    const key = `g:${group}`;
+    if (folded.has(key)) folded.delete(key); else folded.add(key);
+    try { localStorage.setItem("leuffendoc-folded", JSON.stringify([...folded])); } catch (e) { /* not kept */ }
+    const box = $("nav").querySelector(`[data-group="${group}"]`);
+    if (box) {
+      box.classList.toggle("folded", folded.has(key));
+      box.querySelector(".nav-group-head").setAttribute("aria-expanded", String(!folded.has(key)));
+    }
+  }
+
   function renderNav() {
     $("nav-label").textContent = state.org ? "Deze klant" : "Overzicht";
-    $("nav").innerHTML = tabsHere().map((t) => {
+    const tabs = tabsHere();
+    const button = (t) => {
       const subs = state.org && Items.subtypesOf(t.kinds).length;
       const shut = folded.has(t.id);
       return `<button data-tab="${t.id}"${t.id === state.tab ? ' class="active"' : ""}>
@@ -283,11 +306,32 @@
          ${subs ? `<span class="nav-fold hidden${shut ? " folded" : ""}" data-fold="${t.id}" role="button"
              aria-expanded="${!shut}" title="${shut ? "Soorten tonen" : "Soorten inklappen"}">${ICON.chevD}</span>` : ""}
        </button>${subs ? `<div class="nav-subs${shut ? " hidden" : ""}" data-subs="${t.id}"></div>` : ""}`;
-    }).join("")
+    };
+    let html = "";
+    let open = null;
+    for (const t of tabs) {
+      const group = state.org ? (t.group || null) : null;
+      if (group !== open) {
+        if (open) html += `</div></div>`;
+        open = group;
+        if (group) {
+          const here = tabs.some((x) => x.group === group && x.id === state.tab);
+          const shut = folded.has(`g:${group}`) && !here;
+          html += `<div class="nav-group${shut ? " folded" : ""}" data-group="${group}">
+            <button class="nav-group-head" data-group-fold="${group}" aria-expanded="${!shut}">
+              <span>${esc(NAV_GROUPS[group] || group)}</span><span class="nav-group-n" data-group-count="${group}"></span>${ICON.chevD}
+            </button><div class="nav-group-items">`;
+        }
+      }
+      html += button(t);
+    }
+    if (open) html += `</div></div>`;
+    $("nav").innerHTML = html
       + (state.org ? `<button data-back="1" style="margin-top:10px">
            <span class="back-ico">${ICON.chevR}</span> Alle klanten</button>` : "");
     $("nav").querySelectorAll("button").forEach((b) => {
       b.onclick = (ev) => {
+        if (b.dataset.groupFold) { toggleGroup(b.dataset.groupFold); return; }
         const fold = ev.target.closest("[data-fold]");
         if (fold) { toggleFold(fold.dataset.fold); return; }
         go(b.dataset.back ? "#/klanten"
@@ -308,6 +352,11 @@
     $("nav").querySelectorAll("[data-count]").forEach((el) => {
       const tab = ORG.find((t) => t.id === el.dataset.count);
       el.textContent = (tab && tab.kinds || []).reduce((n, k) => n + (counts[k] || 0), 0);
+    });
+    // A folded group still says how much is in it.
+    $("nav").querySelectorAll("[data-group-count]").forEach((el) => {
+      el.textContent = ORG.filter((t) => t.group === el.dataset.groupCount)
+        .flatMap((t) => t.kinds || []).reduce((n, k) => n + (counts[k] || 0), 0);
     });
     // Under a section with configuration types: the types this customer has.
     const roles = summary.roles || {};
@@ -652,8 +701,10 @@
           state.tab = section.id;
           renderNav();
           // An archived item came from the archive, and goes back there.
+          // "configuraties", but "Microsoft 365" and "VPN": a name keeps its capitals.
+          const name = /^[A-Z]{2}|\d/.test(section.label) ? section.label : section.label.toLowerCase();
           $("page-actions").innerHTML = `<button class="btn ghost sm" id="back-list">${ICON.chevR} Terug naar
-            ${item.archived ? "het archief" : esc(section.label.toLowerCase())}</button>`;
+            ${item.archived ? "het archief" : esc(name)}</button>`;
           $("back-list").onclick = () => go(`#/klant/${state.org.id}/${section.id}${item.archived ? "?archief=1" : ""}`);
           $("back-list").querySelector("svg").style.transform = "rotate(180deg)";
         }

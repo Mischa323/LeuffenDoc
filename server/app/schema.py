@@ -396,6 +396,92 @@ CONTACT = {
 }
 
 # --------------------------------------------------------------------------- #
+# Microsoft 365
+#
+# One tenant per customer, as a rule. What Microsoft 365 itself knows -- the
+# domains, subscriptions, users and their licences, mailboxes, groups, sites,
+# app registrations and security settings -- is fetched from Graph once the
+# tenant is linked (see m365graph.py), shown from there and kept in step; the
+# fields that carry ``rmm`` are those. What only people know is typed: who the
+# partner is, how it is backed up, who may reach which shared mailbox.
+# Unlinked, every field is simply typed.
+# --------------------------------------------------------------------------- #
+def _cols(*spec) -> list:
+    """The columns of a table field: (key, label) or (key, label, {extras})."""
+    out = []
+    for key, label, *rest in spec:
+        out.append({"key": key, "label": label, **(rest[0] if rest else {})})
+    return out
+
+
+M365 = {
+    "label": "Microsoft 365-tenant",
+    "plural": "Microsoft 365",
+    "icon": "cloud",
+    "family": "onderdeel",
+    "sub": "De tenant: domeinen, abonnementen, gebruikers, mailboxen en groepen",
+    "backref": "Wat hiernaar verwijst",
+    "columns": ["primary_domain", "security_defaults", "partner"],
+    "groups": [
+        {"key": "tenant", "label": "Tenant", "width": "half", "fields": [
+            _f("tenant_id", "Tenant-ID", rmm="tenant_id", icon="clipboard"),
+            _f("tenant_name", "Naam in Microsoft 365", rmm="tenant_name"),
+            _f("primary_domain", "Standaarddomein", rmm="primary_domain", icon="globe"),
+            _f("domains", "Domeinen", "list", rmm="domains", labels=["standaard", "start"]),
+            _f("partner", "Partner en GDAP", hint="Wie de partner is, en welke rollen er via GDAP zijn."),
+        ]},
+        {"key": "beveiliging", "label": "Beveiliging", "width": "half", "fields": [
+            _f("security_defaults", "Security defaults", "select", options=["Aan", "Uit"],
+               rmm="security_defaults", icon="shield"),
+            _f("mfa", "Hoe MFA geregeld is", "select",
+               options=["Security defaults", "Conditional Access", "Per gebruiker", "Niet"]),
+            _f("break_glass", "Noodaccount", icon="key",
+               hint="Welk account; koppel het wachtwoord uit de kluis aan deze tenant."),
+            _f("backup", "Back-up van Microsoft 365", hint="Waarmee, en hoe vaak."),
+            _f("ca", "Conditional Access", "table", long=True, rmm="ca", icon="shieldCheck",
+               columns=_cols(("name", "Beleid"), ("state", "Staat"))),
+        ]},
+        {"key": "abonnementen", "label": "Abonnementen", "fields": [
+            _f("subscriptions", "Abonnementen", "table", long=True, rmm="subscriptions", icon="clipboard",
+               columns=_cols(("product", "Product"), ("seats", "Aantal"), ("used", "In gebruik"),
+                             ("renews", "Verlengt op", {"expiry": True}), ("status", "Staat"))),
+        ]},
+        {"key": "gebruikers", "label": "Gebruikers", "fields": [
+            _f("users", "Gebruikers", "table", long=True, rmm="users", icon="user",
+               columns=_cols(("name", "Naam"), ("account", "Account"), ("licenses", "Licenties"),
+                             ("job", "Functie"), ("enabled", "Kan aanmelden"), ("kind", "Soort"))),
+        ]},
+        {"key": "mailboxen", "label": "Mailboxen", "fields": [
+            _f("shared", "Gedeelde mailboxen, ruimtes en apparatuur", "table", long=True, rmm="shared", icon="mail",
+               columns=_cols(("mailbox", "Adres"), ("name", "Naam"), ("kind", "Soort"))),
+            _f("shared_access", "Wie bij welke mailbox kan", "table", long=True, icon="lock",
+               columns=_cols(("mailbox", "Mailbox"), ("who", "Wie"),
+                             ("rights", "Rechten", {"options": ["Volledige toegang", "Verzenden als",
+                                                                "Verzenden namens", "Lezen"]})),
+               hint="Microsoft Graph zegt dit niet; het wordt hier bijgehouden."),
+        ]},
+        {"key": "groepen", "label": "Groepen en Teams", "fields": [
+            _f("groups", "Groepen, Teams en distributielijsten", "table", long=True, rmm="groups", icon="nodes",
+               columns=_cols(("name", "Naam"), ("mail", "Adres"), ("kind", "Soort"), ("members", "Leden"))),
+            _f("sites", "SharePoint-sites", "table", long=True, rmm="sites", icon="folder",
+               columns=_cols(("name", "Site"), ("url", "Adres", {"link": True}))),
+        ]},
+        {"key": "apps", "label": "App-registraties", "fields": [
+            _f("apps", "Secrets en certificaten", "table", long=True, rmm="apps", icon="key",
+               columns=_cols(("app", "App"), ("kind", "Soort"), ("name", "Omschrijving"),
+                             ("expires", "Verloopt op", {"expiry": True})),
+               hint="Een verlopen secret is een koppeling die stilletjes stopt; de bel waarschuwt ervoor."),
+        ]},
+        {"key": "over", "label": "Over", "fields": [
+            _f("notes", "Notities", "textarea"),
+        ]},
+    ],
+}
+
+# What Microsoft 365 fills, once linked.
+M365_KEYS = [f["rmm"] for g in M365["groups"] for f in g["fields"] if f.get("rmm")]
+
+# --------------------------------------------------------------------------- #
 # Software and who it comes from
 #
 # The applications a customer runs its business on, the licences it pays for,
@@ -610,6 +696,7 @@ BUILT_IN: dict[str, dict] = {
     "printer": PRINTER,
     "internet": INTERNET,
     "rack": RACK,
+    "m365": M365,
     "subnet": SUBNET,
     "vpn": VPN,
     "application": APPLICATION,
@@ -824,12 +911,25 @@ def rmm_held(item: dict | None) -> set:
     with an agent gets them all; what else comes from the RMM says which (the
     ``holds`` in what it reports), so a field it knows nothing about -- the
     serial number of a UniFi switch -- stays yours to fill in."""
-    if not item or item.get("source") != "rmm" or not item.get("rmm_device_id"):
+    if not item or item.get("source") not in SYNCED or not item.get("rmm_device_id"):
         return set()
     payload = item.get("rmm") or {}
     if isinstance(payload.get("holds"), list):
         return set(payload["holds"])
     return {f["rmm"] for f in fields_of(item["kind"]).values() if f.get("rmm")}
+
+
+# Where an item can be kept in step from: the RMM, or Microsoft 365.
+SYNCED = ("rmm", "m365")
+
+
+def value_of(item: dict, field: dict, held: set | None = None):
+    """A field's value as the page shows it: what the RMM or Microsoft 365
+    reports where they keep it, what was typed otherwise."""
+    held = rmm_held(item) if held is None else held
+    if field.get("rmm") and field["rmm"] in held:
+        return (item.get("rmm") or {}).get(field["rmm"])
+    return (item.get("fields") or {}).get(field["key"])
 
 
 def clean(name: str, values: dict, held: set | frozenset = frozenset()) -> dict:

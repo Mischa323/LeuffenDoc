@@ -3,6 +3,19 @@
 ## [Unreleased]
 
 ### Added
+- **Microsoft 365, documented and kept up to date.** A new section **Microsoft 365** holds a customer's tenant. Some of it is typed: the partner and GDAP, how MFA is arranged, the break-glass account, how the tenant is backed up, and who may reach which shared mailbox. Link the tenant with an app registration in it — tenant ID, client ID and client secret; the page lists the read-only Graph permissions it needs and how to grant them — and the rest is fetched instead of typed, again every six hours or on **Nu bijwerken**:
+  - the domains (which is the default);
+  - every subscription with its seats, how many are used, its status and **when it renews**;
+  - every user with their licences, job title, whether they can sign in, and whether they are a guest;
+  - the **shared mailboxes**, rooms and equipment;
+  - the **groups, Teams and distribution lists with their members**;
+  - the SharePoint sites;
+  - every **app registration's secrets and certificates with the date they expire**;
+  - whether security defaults are on, and the Conditional Access policies.
+
+  What is fetched is marked **365** and cannot be typed over. The history says what changed in words — "Nieuwe gebruiker: …", "Weg: …", "Microsoft 365 Business Premium: 10 → 12 licenties", a new secret — instead of two copies of a list. The bell warns about an app secret or a subscription that runs out soon. Each part is read on its own: a permission that was not granted costs only that part, and the page says which permission to add. The client secret is sealed with the vault's key and never shown again, only its last four characters. Nothing is ever written to the tenant. **Ontkoppelen** keeps what was fetched on the page, typed from then on. Long tables show their first twelve rows, with the rest one click away.
+- **The sidebar in groups.** A customer's sections sit under headings — **Infrastructuur** (configurations, patch cabinets), **Netwerk** (networks, VPN, internet), **Cloud en software** (Microsoft 365, applications, licences, suppliers), **Organisatie** (locations, contacts), **Kluis en documenten** and **Eigen types**. Each heading folds away and says how much is under it while folded; the browser remembers it, and the group you are in always shows.
+- **Filling switch ports quickly.** The ports in a switch's form have a **Snel invullen** bar. Give a range (`1-24, 26`, or `alle`), a label and a VLAN, and they are filled in at once. `{n}` in the label becomes the port number and `{i}` counts from 1, so *Wandpunt A{i}* on ports 13–24 gives A1 … A12. An empty field leaves what is there; `-` empties it. **Overnemen van** copies the labels and VLANs of another switch, port for port. It fills the form; **Opslaan** saves it.
 - **Netwerken, VPN, Applicaties, Licenties and Toeleveranciers.** Five new sections at every customer, built in like the rest — with their history, search, links, the export and the bell for what runs out:
   - **Netwerken**: each subnet or VLAN with its address range, VLAN number, purpose, gateway (and the router or firewall it is), DNS servers and location, and its **DHCP** — on, off or by relay, which device hands out addresses, the range, the lease time and the fixed addresses.
   - **VPN**: site-to-site or for people working from home, the protocol, the device it ends on, the other side and the networks on either side, the settings that must match at both ends, who may connect and where the client is — and the **pre-shared key in the vault**, encrypted like a password.

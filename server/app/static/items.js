@@ -95,10 +95,13 @@ window.DocItems = function (ctx) {
      serial number there). A switch typed in by hand has a model like any other
      field. The server decides the same way (schema.rmm_held). */
   function held(item, field) {
-    if (!field.rmm || !item || item.source !== "rmm" || !item.rmm_device_id) return false;
+    if (!field.rmm || !item || !SYNCED[item.source] || !item.rmm_device_id) return false;
     const holds = (item.rmm || {}).holds;
     return Array.isArray(holds) ? holds.includes(field.rmm) : true;
   }
+
+  // Where a held value comes from -- the RMM, or Microsoft 365 -- as a tag says it.
+  const SYNCED = { rmm: { tag: "RMM", from: "uit de RMM" }, m365: { tag: "365", from: "uit Microsoft 365" } };
 
   function valueOf(item, field) {
     if (held(item, field)) return (item.rmm || {})[field.rmm] ?? "";
@@ -131,17 +134,31 @@ window.DocItems = function (ctx) {
   /* A table on the page: what a firewall forwards, its rules -- under the
      field's name, a row a line, scrolling sideways on a narrow screen rather
      than squeezing the columns. */
-  function tableHtml(field, value) {
+  const LONG_TABLE = 12;
+
+  function tableHtml(field, value, tag) {
     const rows = Array.isArray(value) ? value : [];
     const cols = field.columns || [];
     if (!rows.length || !cols.length) return "";
-    return `<div class="tview" data-table="${esc(field.key)}">
+    const cellHtml = (c, v) => {
+      if (!v) return "";
+      // An address of a site opens it; a date that runs out says so; ports
+      // and addresses line up in a fixed width.
+      if (c.link && /^https?:\/\//i.test(v)) return `<a href="${esc(v)}" target="_blank" rel="noopener">${esc(v)}</a>`;
+      const flag = c.expiry ? expiry({ expiry: true }, v) : null;
+      const shown = c.expiry && /^\d{4}-\d{2}-\d{2}$/.test(v) ? new Date(v).toLocaleDateString("nl-NL") : v;
+      return esc(shown) + (flag ? ` <span class="tag ${flag.kind}">${esc(flag.text)}</span>` : "");
+    };
+    const technical = (v) => /^[\d.:/\-, *]+$/.test(String(v || "").trim());
+    return `<div class="tview${rows.length > LONG_TABLE ? " folded" : ""}" data-table="${esc(field.key)}">
         <div class="tview-head">${field.icon && ICON[field.icon] ? `<span class="dt-ic">${ICON[field.icon]}</span>` : ""}
-          <span>${esc(field.label)}</span><span class="n">${rows.length}</span></div>
+          <span>${esc(field.label)}</span><span class="n">${rows.length}</span>${tag ? ` <span class="tag sm">${esc(tag)}</span>` : ""}</div>
         <div class="tview-scroll"><table class="tview-table">
           <thead><tr>${cols.map((c) => `<th>${esc(c.label)}</th>`).join("")}</tr></thead>
-          <tbody>${rows.map((r) => `<tr>${cols.map((c, i) => `<td${i ? ' class="mono"' : ""}>${esc(r[c.key] || "")}</td>`).join("")}</tr>`).join("")}</tbody>
+          <tbody>${rows.map((r, n) => `<tr${n >= LONG_TABLE ? ' class="tv-more"' : ""}>${cols.map((c) =>
+            `<td${technical(r[c.key]) ? ' class="mono"' : ""}>${cellHtml(c, r[c.key])}</td>`).join("")}</tr>`).join("")}</tbody>
         </table></div>
+        ${rows.length > LONG_TABLE ? `<button type="button" class="tv-all" data-n="${rows.length}">Alle ${rows.length} tonen</button>` : ""}
       </div>`;
   }
 
@@ -184,11 +201,15 @@ window.DocItems = function (ctx) {
     return esc(text) + (flag ? ` <span class="tag ${flag.kind}">${esc(flag.text)}</span>` : "");
   }
 
-  function inputFor(field, value, all, orgId, fromRmm) {
+  function inputFor(field, value, all, orgId, from) {
     const id = `f-${field.key}`;
-    if (fromRmm) {
-      return `<div class="rmm-val">${value === "" ? "<span class=\"muted\">niet bekend</span>" : esc(value)}
-              <span class="tag">uit de RMM</span></div>`;
+    // Kept up from elsewhere ("uit de RMM", "uit Microsoft 365"): shown, not typed.
+    if (from) {
+      const shown = Array.isArray(value)
+        ? (value.length ? `${value.length} ${field.type === "table" ? (value.length === 1 ? "regel" : "regels") : "waarden"}` : "")
+        : value;
+      return `<div class="rmm-val">${shown === "" ? "<span class=\"muted\">niet bekend</span>" : esc(shown)}
+              <span class="tag">${esc(from)}</span></div>`;
     }
     /* Several labelled values under one heading. One phone number per person
        is a fiction: there is a desk number, a mobile, and the one that is
@@ -346,7 +367,7 @@ window.DocItems = function (ctx) {
               ? ` data-roles="${esc(f.roles.join("|"))}"${filled ? ' data-filled="1"' : ""}` : ""}>
             <label for="f-${f.key}">${f.icon && ICON[f.icon]
               ? `<span class="lb-ic">${ICON[f.icon]}</span>` : ""}${esc(f.label)}</label>
-            ${inputFor(f, value, all, orgId, held(item, f))}
+            ${inputFor(f, value, all, orgId, held(item, f) ? SYNCED[item.source].from : "")}
             ${f.hint ? `<div class="hint">${esc(f.hint)}</div>` : ""}
           </div>`;
           }).join("")}
@@ -685,18 +706,21 @@ window.DocItems = function (ctx) {
     const mayReveal = !org.may || org.may.reveal;
     let editing = false;
 
-    const source = item.source === "rmm"
+    // Worked out each time the head is drawn: linking a tenant, or unlinking
+    // it, changes where the page comes from without leaving it.
+    const source = () => (item.source === "rmm"
       ? (item.rmm_gone
          ? `<span class="tag warn">niet meer in de RMM sinds ${when(item.rmm_seen_at)}</span>`
          : `<span class="tag">uit de RMM, bijgewerkt ${when(item.rmm_seen_at)}</span>`)
-      : `<span class="tag">hier vastgelegd</span>`;
+      : item.source === "m365" ? `<span class="tag">uit Microsoft 365, bijgewerkt ${when(item.rmm_seen_at)}</span>`
+      : `<span class="tag">hier vastgelegd</span>`);
 
     const head = () => `<div class="panel item-head">
         <div class="ih-mark">${ICON[spec.icon]}</div>
         <div class="ih-txt">
           <h3>${esc(item.name)}${item.archived ? ' <span class="tag">gearchiveerd</span>' : ""}
             ${item.restricted ? ` <span class="tag warn">${ICON.lock} afgeschermd</span>` : ""}</h3>
-          <small>${esc(spec.label)} · ${source}<span id="in-rack"></span></small>
+          <small>${esc(spec.label)} · ${source()}<span id="in-rack"></span></small>
         </div>
         <div class="ih-act" id="item-actions"></div>
       </div>`;
@@ -718,14 +742,14 @@ window.DocItems = function (ctx) {
                 <span>${esc(e.value)}</span></div>`).join("")
             : cell(item, f, all);
         return `<div class="dt">${f.icon && ICON[f.icon] ? `<span class="dt-ic">${ICON[f.icon]}</span>` : ""}
-                  <span>${esc(f.label)}</span>${held(item, f) ? ' <span class="tag sm">RMM</span>' : ""}</div>
+                  <span>${esc(f.label)}</span>${held(item, f) ? ` <span class="tag sm">${SYNCED[item.source].tag}</span>` : ""}</div>
                 <div class="dd">${ref}</div>`;
       }).join("");
       if (!rows && !long.length) return "";
       return `<div class="panel">
           <div class="panel-head"><h2>${esc(group.label)}</h2></div>
           ${rows ? `<div class="deflist">${rows}</div>` : ""}
-          ${long.map((f) => (f.type === "table" ? tableHtml(f, valueOf(item, f))
+          ${long.map((f) => (f.type === "table" ? tableHtml(f, valueOf(item, f), held(item, f) ? SYNCED[item.source].tag : "")
             : `<div class="longtext">${esc(display(item, f, all))}</div>`)).join("")}
         </div>`;
     })() }))) || `<div class="panel"><div class="empty">
@@ -766,6 +790,97 @@ window.DocItems = function (ctx) {
         </div>`;
     };
 
+    /* Microsoft 365: link the tenant, or see how its last reading went. The
+       secret goes to the server once and is never shown again -- only its
+       last four characters, to tell two apart. */
+    async function drawM365() {
+      const slot = host.querySelector("#m365");
+      if (!slot) return;
+      let st;
+      try { st = await api(`/api/items/${item.id}/m365`); } catch (e) { slot.innerHTML = ""; return; }
+      const perms = `<details class="m365-how"><summary>Wat de app-registratie nodig heeft</summary>
+          <ol>
+            <li>In het Entra-beheercentrum van de klant: <b>App-registraties → Nieuwe registratie</b>, alleen deze tenant.</li>
+            <li><b>API-machtigingen → Microsoft Graph → Toepassingsmachtigingen</b>:
+              <ul>${st.permissions.map((p) => `<li><code>${esc(p.name)}</code> — ${esc(p.for)}</li>`).join("")}</ul></li>
+            <li><b>Beheerderstoestemming verlenen</b> voor de tenant.</li>
+            <li><b>Certificaten en geheimen → Nieuw clientgeheim</b>; zet de vervaldatum in je agenda — de bel waarschuwt ook.</li>
+          </ol>
+          <div class="hint">Alleen lezen: LeuffenDoc schrijft nooit iets in de tenant.</div></details>`;
+      if (!st.linked) {
+        slot.innerHTML = `<div class="panel m365-panel">
+            <div class="panel-head"><h2>Koppeling met Microsoft 365</h2>
+              <span class="sub">Ophalen in plaats van overtypen</span></div>
+            ${mayEdit ? `<div class="m365-form">
+              <div class="frow"><label for="m365-tenant">Tenant-ID</label>
+                <input class="inp mono" id="m365-tenant" value="${esc(item.fields.tenant_id || "")}" placeholder="00000000-0000-0000-0000-000000000000 of klant.onmicrosoft.com" /></div>
+              <div class="frow"><label for="m365-client">Client-ID van de app-registratie</label>
+                <input class="inp mono" id="m365-client" placeholder="00000000-0000-0000-0000-000000000000" /></div>
+              <div class="frow"><label for="m365-secret">Client secret</label>
+                <input class="inp mono" id="m365-secret" type="password" autocomplete="off" /></div>
+              <button class="btn" id="m365-link">${ICON.link} Koppelen en ophalen</button>
+              <span class="m365-busy hidden" id="m365-busy">Bezig met ophalen…</span>
+            </div>${perms}` : `<div class="empty">Niet gekoppeld.</div>`}
+          </div>`;
+        const btn = slot.querySelector("#m365-link");
+        if (btn) btn.onclick = async () => {
+          btn.disabled = true;
+          slot.querySelector("#m365-busy").classList.remove("hidden");
+          try {
+            await api(`/api/items/${item.id}/m365`, {
+              method: "PUT", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ tenant_id: slot.querySelector("#m365-tenant").value,
+                                     client_id: slot.querySelector("#m365-client").value,
+                                     client_secret: slot.querySelector("#m365-secret").value }),
+            });
+            toast("Gekoppeld en opgehaald");
+            item = await api(`/api/items/${item.id}`);
+            forget(org.id);
+            draw();
+          } catch (e) {
+            toast(e.message);
+            btn.disabled = false;
+            slot.querySelector("#m365-busy").classList.add("hidden");
+          }
+        };
+        return;
+      }
+      const problems = st.problems || [];
+      slot.innerHTML = `<div class="panel m365-panel">
+          <div class="panel-head"><h2>Microsoft 365</h2>
+            <span class="sub">${st.last_ok ? `bijgewerkt ${when(st.last_sync)}` : `<span class="tag warn">ophalen mislukt</span>`}
+              · tenant <span class="mono">${esc(st.tenant_id)}</span> · secret …${esc(st.secret_hint || "")}</span>
+            <span class="spacer"></span>
+            ${mayEdit ? `<button class="btn ghost sm" id="m365-sync">${ICON.refresh} Nu bijwerken</button>
+              <button class="btn ghost sm" id="m365-unlink">${ICON.trash} Ontkoppelen</button>` : ""}</div>
+          ${st.last_error ? `<div class="callout warn m365-note"><div class="ic">${ICON.alert}</div>
+              <div class="cd">${esc(st.last_error)}</div></div>` : ""}
+          ${problems.length ? `<div class="callout info m365-note"><div class="ic">${ICON.info}</div><div class="cd">
+              <b>Niet alles kon gelezen worden.</b><ul>${problems.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>
+              ${perms}</div></div>` : ""}
+        </div>`;
+      const sync = slot.querySelector("#m365-sync");
+      if (sync) sync.onclick = async () => {
+        sync.disabled = true;
+        try {
+          await api(`/api/items/${item.id}/m365/sync`, { method: "POST" });
+          toast("Bijgewerkt");
+          item = await api(`/api/items/${item.id}`);
+          draw();
+        } catch (e) { toast(e.message); sync.disabled = false; drawM365(); }
+      };
+      const unlink = slot.querySelector("#m365-unlink");
+      if (unlink) unlink.onclick = async () => {
+        if (!window.confirm("De koppeling met Microsoft 365 verwijderen? Wat is opgehaald blijft staan, en wordt vanaf nu met de hand bijgehouden.")) return;
+        try {
+          await api(`/api/items/${item.id}/m365`, { method: "DELETE" });
+          toast("Ontkoppeld");
+          item = await api(`/api/items/${item.id}`);
+          draw();
+        } catch (e) { toast(e.message); }
+      };
+    }
+
     const draw = async () => {
       const goneNote = item.rmm_gone ? `<div class="callout warn" style="margin-bottom:14px">
           <div class="ic">${ICON.alert}</div><div style="flex:1">
@@ -794,6 +909,7 @@ window.DocItems = function (ctx) {
                    // beside it, so there the rest comes underneath.
                    : (item.kind === "rack" ? readBlocks() + `<div id="rack-view"></div>` : "")
                      + `<div class="item-cols${item.kind === "rack" ? " solo" : ""}"><div class="item-main">`
+                     + (item.kind === "m365" ? `<div id="m365"></div>` : "")
                      + (item.kind === "rack" ? "" : readBlocks())
                      + unifiHtml()
                      + `<div id="secret"></div><div id="access"></div>`
@@ -818,6 +934,15 @@ window.DocItems = function (ctx) {
         host.querySelectorAll("[data-goto]").forEach((a) => {
           a.onclick = () => go(`#/klant/${org.id}/item/${a.dataset.goto}`);
         });
+        // A long table shows its first rows; the rest on request.
+        host.querySelectorAll(".tv-all").forEach((b) => {
+          b.onclick = () => {
+            const box = b.closest(".tview");
+            box.classList.toggle("folded");
+            b.textContent = box.classList.contains("folded") ? `Alle ${b.dataset.n} tonen` : "Minder tonen";
+          };
+        });
+        if (item.kind === "m365") drawM365();
         if (Rack && item.kind === "rack") {
           Rack.view(host.querySelector("#rack-view"), { org, item, mayEdit, all, kinds: KINDS });
         }
@@ -1506,10 +1631,33 @@ window.DocItems = function (ctx) {
 
     function portsFormHtml() {
       if (!Array.isArray(item.ports) || !item.ports.length) return "";
+      const others = switchesHere().filter((s) => s.id !== item.id);
       return `<div class="panel form-block" id="ports-form">
           <div class="panel-head"><h2>Poorten</h2>
             <span class="sub">Label en VLAN per poort. Aansluiten doe je op het apparaat zelf,
               zodat de MAC erbij staat</span></div>
+          <div class="ports-bulk">
+            <div class="pb-title">${ICON.zap} Snel invullen</div>
+            <div class="pb-row">
+              <div class="frow"><label for="pb-range">Poorten</label>
+                <input class="inp mono" id="pb-range" placeholder="1-24, 26 of alle" /></div>
+              <div class="frow"><label for="pb-label">Label</label>
+                <input class="inp" id="pb-label" placeholder="Wandpunt A{n}" /></div>
+              <div class="frow"><label for="pb-vlan">VLAN</label>
+                <input class="inp" id="pb-vlan" placeholder="10" /></div>
+              <button type="button" class="btn ghost sm" id="pb-apply">Invullen</button>
+            </div>
+            <div class="hint"><code>{n}</code> wordt het poortnummer, <code>{i}</code> telt vanaf 1 —
+              <i>Wandpunt A{i}</i> op poort 13–24 wordt A1 … A12. Leeg laat staan wat er staat, <code>-</code> maakt leeg.
+              Daarna <b>Opslaan</b>.</div>
+            ${others.length ? `<div class="pb-row pb-copy">
+              <div class="frow"><label for="pb-from">Of overnemen van</label>
+                <select class="inp" id="pb-from"><option value="">— een andere switch —</option>
+                  ${others.map((s) => `<option value="${esc(s.id)}">${esc(s.name)}${s.fields.ports ? ` (${esc(s.fields.ports)} poorten)` : ""}</option>`).join("")}
+                </select></div>
+              <button type="button" class="btn ghost sm" id="pb-copy">Labels en VLAN's overnemen</button>
+            </div>` : ""}
+          </div>
           <table class="grid ports"><thead><tr><th>Poort</th><th>Wat erop zit</th>
             <th>Label</th><th>VLAN</th><th></th></tr></thead><tbody>
             ${item.ports.map((p) => `<tr class="port-edit${p.adapter ? "" : " free"}"
@@ -1561,6 +1709,7 @@ window.DocItems = function (ctx) {
         };
       }
       const ports = host.querySelector("#ports-form");
+      if (ports) wirePortsBulk(ports);
       if (ports) {
         ports.querySelectorAll("[data-unpatch]").forEach((b) => {
           b.onclick = () => {
@@ -1571,6 +1720,64 @@ window.DocItems = function (ctx) {
           };
         });
       }
+    }
+
+    /* Filling many ports at once: a range, a label with the port number or a
+       count in it, a VLAN -- or what another switch already has. It fills the
+       form; Opslaan saves it, like a change typed by hand. */
+    function wirePortsBulk(form) {
+      const rows = () => [...form.querySelectorAll(".port-edit")];
+      const flash = (row) => { row.classList.remove("pb-filled"); void row.offsetWidth; row.classList.add("pb-filled"); };
+      const pick = (text) => {
+        const all = rows();
+        const spec = text.trim().toLowerCase();
+        if (spec === "alle" || spec === "*") return all;
+        const wanted = new Set();
+        for (const part of spec.split(/[,;\s]+/).filter(Boolean)) {
+          const m = part.match(/^(\d+)(?:-(\d+))?$/);
+          if (!m) throw new Error(`“${part}” is geen poort of reeks — schrijf bijvoorbeeld 1-24, 26`);
+          const a = Number(m[1]), b = Number(m[2] || m[1]);
+          for (let n = Math.min(a, b); n <= Math.max(a, b); n++) wanted.add(n);
+        }
+        return all.filter((r) => wanted.has(Number(r.dataset.port)));
+      };
+      const set = (row, key, value) => {
+        if (value === "") return;
+        row.querySelector(`[data-pf="${key}"]`).value = value === "-" ? "" : value;
+      };
+      form.querySelector("#pb-apply").onclick = () => {
+        let chosen;
+        try { chosen = pick(form.querySelector("#pb-range").value); } catch (e) { toast(e.message); return; }
+        if (!chosen.length) { toast("Geen van die poorten zit op deze switch"); return; }
+        const label = form.querySelector("#pb-label").value.trim();
+        const vlan = form.querySelector("#pb-vlan").value.trim();
+        if (!label && !vlan) { toast("Vul een label of een VLAN in om te zetten"); return; }
+        chosen.forEach((row, i) => {
+          set(row, "label", label.replace(/\{n\}/g, row.dataset.port).replace(/\{i\}/g, String(i + 1)));
+          set(row, "vlan", vlan);
+          flash(row);
+        });
+        toast(`${chosen.length} ${chosen.length === 1 ? "poort" : "poorten"} ingevuld — nog opslaan`);
+      };
+      const copy = form.querySelector("#pb-copy");
+      if (copy) copy.onclick = async () => {
+        const from = form.querySelector("#pb-from").value;
+        if (!from) { toast("Kies eerst de switch om van over te nemen"); return; }
+        try {
+          const other = await api(`/api/items/${from}`);
+          const by = Object.fromEntries((other.ports || []).map((p) => [String(p.number), p]));
+          let n = 0;
+          rows().forEach((row) => {
+            const p = by[row.dataset.port];
+            if (!p || (!p.label && !p.vlan)) return;
+            row.querySelector('[data-pf="label"]').value = p.label || "";
+            row.querySelector('[data-pf="vlan"]').value = p.vlan || "";
+            flash(row);
+            n++;
+          });
+          toast(n ? `${n} poorten overgenomen van ${other.name} — nog opslaan` : `${other.name} heeft geen labels of VLAN's om over te nemen`);
+        } catch (e) { toast(e.message); }
+      };
     }
 
     /* Saving the adapters is a handful of calls rather than one, so the order
@@ -1814,7 +2021,8 @@ window.DocItems = function (ctx) {
        button that would do nothing is worse than no button. */
     function revertible(revision) {
       if (revision.action !== "updated" || !revision.changes.length) return false;
-      const own = fieldsOf(item.kind).map((f) => f.key);
+      // What the RMM or Microsoft 365 fills is not put back by writing it.
+      const own = fieldsOf(item.kind).filter((f) => !held(item, f)).map((f) => f.key);
       return revision.changes.every((c) => c.key === "naam" || own.includes(c.key));
     }
 
@@ -1847,7 +2055,7 @@ window.DocItems = function (ctx) {
             <span class="sub">${revisions.length === 1 ? "1 wijziging" : `${revisions.length} wijzigingen`}</span></div>
           ${shown.map((r) => `<div class="rev-row">
             <div class="rev-top">
-              <b>${esc(r.user_email || "de RMM")}</b>
+              <b>${esc(r.user_email || (r.source === "m365" ? "Microsoft 365" : "de RMM"))}</b>
               <span class="muted">${esc(word[r.action] || r.action)}</span>
               <span class="muted">${when(r.at)}</span>
               ${revertible(r)

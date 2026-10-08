@@ -26,8 +26,8 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, Redirec
                                Response)
 from fastapi.staticfiles import StaticFiles
 
-from . import (attachments, auth, backup, database, docpush, export, m365, pairing, rack, rmm,
-               schema, settings, setup, strength, vault)
+from . import (attachments, auth, backup, database, docpush, export, m365, m365graph, pairing, rack,
+               rmm, schema, settings, setup, strength, vault)
 
 log = logging.getLogger("leuffendoc")
 
@@ -98,6 +98,18 @@ async def _backup_loop() -> None:
         await asyncio.sleep(600)
 
 
+async def _m365_loop() -> None:
+    """Read every linked Microsoft 365 tenant again when its last reading is
+    older than m365graph.SYNC_HOURS; checked every ten minutes."""
+    while True:
+        for item_id in m365graph.due():
+            try:
+                await asyncio.to_thread(m365graph.sync, item_id)
+            except Exception as exc:              # the status is on the item; the loop goes on
+                log.info("reading Microsoft 365 for %s failed: %r", item_id, exc)
+        await asyncio.sleep(600)
+
+
 async def _note_changes(request: Request, call_next):
     """Any change that went through asks for the RMM's Docs tab to be brought
     up to date. Which change affects which machine is not worked out here: a
@@ -121,9 +133,11 @@ async def lifespan(_app: FastAPI):
     asyncio.create_task(asyncio.to_thread(docker_update.remember_own_image))
     task = asyncio.create_task(_sync_loop())
     backups = asyncio.create_task(_backup_loop())
+    tenants = asyncio.create_task(_m365_loop())
     yield
     task.cancel()
     backups.cancel()
+    tenants.cancel()
 
 
 app = FastAPI(title="LeuffenDoc", version=VERSION, lifespan=lifespan)
@@ -363,24 +377,37 @@ def expiring_everywhere(user: dict = Depends(auth.current_user)):
     hidden = _hidden(user)
     orgs = database.list_orgs() if user.get("is_admin") else database.user_orgs(user["email"])
     out = []
+    def days_until(value):
+        try:
+            return (datetime.date.fromisoformat(str(value)[:10]) - today).days
+        except ValueError:
+            return None
+
     for org in orgs:
         for item in database.list_items(org["id"]):
             if item["id"] in hidden:
                 continue
+            held = schema.rmm_held(item)
             for field in schema.shown_fields_of(item["kind"]).values():
-                if not field.get("expiry") or field["type"] != "date":
-                    continue
-                value = item["fields"].get(field["key"])
+                value = schema.value_of(item, field, held)
                 if not value:
                     continue
-                try:
-                    days = (datetime.date.fromisoformat(str(value)[:10]) - today).days
-                except ValueError:
-                    continue
-                if days <= warn:
-                    out.append({"org_id": org["id"], "org_name": org["name"], "item_id": item["id"],
-                                "item_name": item["name"], "kind": item["kind"],
-                                "field": field["label"], "on": str(value)[:10], "days": days})
+                found = []
+                if field.get("expiry") and field["type"] == "date":
+                    found.append((field["label"], value))
+                elif field["type"] == "table" and isinstance(value, list):
+                    # A date in a row of a table: an app secret, a subscription
+                    # that renews -- named by the row it is in.
+                    for column in (c for c in field.get("columns") or [] if c.get("expiry")):
+                        first = (field.get("columns") or [{}])[0].get("key")
+                        found += [(f"{row.get(first) or field['label']}: {column['label'].lower()}", row.get(column["key"]))
+                                  for row in value if isinstance(row, dict) and row.get(column["key"])]
+                for label, on in found:
+                    days = days_until(on)
+                    if days is not None and days <= warn:
+                        out.append({"org_id": org["id"], "org_name": org["name"], "item_id": item["id"],
+                                    "item_name": item["name"], "kind": item["kind"],
+                                    "field": label, "on": str(on)[:10], "days": days})
     out.sort(key=lambda e: e["days"])
     return {"count": len(out), "items": out[:40]}
 
@@ -792,6 +819,57 @@ def remove_attachment(attachment_id: str, request: Request,
 # --------------------------------------------------------------------------- #
 def _org_items(org_id: str) -> dict:
     return {i["id"]: i for i in database.list_items(org_id, include_archived=True)}
+
+
+# --------------------------------------------------------------------------- #
+# Microsoft 365: a tenant item read from Graph (see m365graph.py)
+# --------------------------------------------------------------------------- #
+def _tenant_item(user: dict, item_id: str, need: str) -> dict:
+    item, _ = _item_for(user, item_id, need)
+    if item["kind"] != "m365":
+        raise HTTPException(status_code=400, detail="Dit is geen Microsoft 365-tenant")
+    return item
+
+
+@app.get("/api/items/{item_id}/m365")
+def m365_status(item_id: str, user: dict = Depends(auth.current_user)):
+    _tenant_item(user, item_id, "read")
+    return m365graph.status(item_id)
+
+
+@app.put("/api/items/{item_id}/m365")
+async def m365_connect(item_id: str, request: Request, user: dict = Depends(auth.current_user)):
+    """Link a tenant: check the app registration can read it, store it (the
+    secret sealed with the vault's key) and read it for the first time."""
+    item = _tenant_item(user, item_id, "edit")
+    body = await request.json()
+    try:
+        result = await asyncio.to_thread(
+            m365graph.connect, item, str(body.get("tenant_id") or ""), str(body.get("client_id") or ""),
+            str(body.get("client_secret") or ""), user["email"])
+    except m365graph.GraphError as exc:
+        raise HTTPException(status_code=400, detail=f"Microsoft 365: {exc}")
+    database.audit("m365.link", user_email=user["email"], org_id=item["org_id"], target=item["name"],
+                   detail=f"tenant {body.get('tenant_id')}", ip=auth.client_ip(request))
+    return result
+
+
+@app.post("/api/items/{item_id}/m365/sync")
+async def m365_sync_now(item_id: str, user: dict = Depends(auth.current_user)):
+    _tenant_item(user, item_id, "edit")
+    try:
+        return await asyncio.to_thread(m365graph.sync, item_id)
+    except m365graph.GraphError as exc:
+        raise HTTPException(status_code=400, detail=f"Microsoft 365: {exc}")
+
+
+@app.delete("/api/items/{item_id}/m365")
+def m365_disconnect(item_id: str, request: Request, user: dict = Depends(auth.current_user)):
+    item = _tenant_item(user, item_id, "edit")
+    m365graph.disconnect(item_id)
+    database.audit("m365.unlink", user_email=user["email"], org_id=item["org_id"], target=item["name"],
+                   ip=auth.client_ip(request))
+    return m365graph.status(item_id)
 
 
 @app.get("/api/items/{item_id}/rack")
@@ -1284,8 +1362,9 @@ def search(q: str = "", org: str = "", user: dict = Depends(auth.current_user)):
             # of thing you arrive with.
             for key, value in (item["rmm"] or {}).items():
                 spec = next((f for f in fields.values() if f.get("rmm") == key), None)
-                if spec and isinstance(value, str) and needle in value.lower():
-                    hits.append({"where": spec["label"], "text": value})
+                text = database._plain(value) if isinstance(value, list) else value
+                if spec and isinstance(text, str) and needle in text.lower():
+                    hits.append({"where": spec["label"], "text": _snippet(text, needle)})
             if item["kind"] in schema.adapter_kinds():
                 for adapter in database.list_adapters(item["id"]):
                     for key in ("mac", "ipv4", "ipv6", "name"):
