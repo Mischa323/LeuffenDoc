@@ -1617,10 +1617,12 @@ window.DocItems = function (ctx) {
             <span class="sub">${item.relations.length || "Wat hier mee samenhangt"}</span></div>
           ${rows}
           ${options.length && mayEdit ? `<div class="rel-add">
-            <select class="inp" id="rel-pick"><option value="">Koppel aan…</option>
-              ${options.map((o) => `<option value="${esc(o.id)}">${esc(KINDS[o.kind].label)}: ${esc(o.name)}</option>`).join("")}
-            </select>
-            <button class="btn sm" id="rel-go">${ICON.link} Koppelen</button></div>` : ""}
+            <div class="rel-find">
+              <label class="rel-field"><span class="rel-find-ic">${ICON.link}</span>
+                <input class="inp" id="rel-search" type="search" autocomplete="off" spellcheck="false"
+                       placeholder="Koppel aan… zoek op naam of soort" aria-controls="rel-hits" /></label>
+              <div class="rel-hits hidden" id="rel-hits" role="listbox"></div>
+            </div></div>` : ""}
         </div>`;
       slot.querySelectorAll(".rel-row").forEach((row) => {
         row.onclick = (e) => {
@@ -1637,18 +1639,73 @@ window.DocItems = function (ctx) {
           } catch (e) { toast(e.message); }
         };
       });
-      const go_ = slot.querySelector("#rel-go");
-      if (go_) go_.onclick = async () => {
-        const pick = slot.querySelector("#rel-pick").value;
-        if (!pick) return;
+      const search = slot.querySelector("#rel-search");
+      if (search) wireLinkSearch(search, slot.querySelector("#rel-hits"), options);
+    }
+
+    /* Linking something: type part of its name, its kind or its type
+       ("switch", "wachtwoord", "printer") and pick it -- with the mouse, or
+       the arrow keys and Enter. A customer with two hundred items does not
+       fit in a drop-down. */
+    function wireLinkSearch(search, box, options) {
+      const typeOf = (o) => {
+        const sub = subtypesOf([o.kind]).find((s) => s.role === (o.fields || {}).role);
+        return sub ? sub.label : "";
+      };
+      const hay = new Map(options.map((o) => [o.id,
+        `${o.name} ${(KINDS[o.kind] || {}).label || ""} ${(KINDS[o.kind] || {}).plural || ""} ${typeOf(o)}`.toLowerCase()]));
+      const sorted = [...options].sort((a, b) => a.name.localeCompare(b.name, "nl"));
+      let hits = [];
+      let at = 0;
+
+      const link = async (id) => {
+        search.disabled = true;
         try {
           await api(`/api/items/${item.id}/relations`, {
             method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ item_id: pick }),
+            body: JSON.stringify({ item_id: id }),
           });
           item = await api(`/api/items/${item.id}`);
+          toast("Gekoppeld");
           draw();
-        } catch (e) { toast(e.message); }
+        } catch (e) { toast(e.message); search.disabled = false; }
+      };
+      const show = () => {
+        const words = search.value.toLowerCase().split(/\s+/).filter(Boolean);
+        const found = sorted.filter((o) => words.every((w) => hay.get(o.id).includes(w)));
+        hits = found.slice(0, 8);
+        at = Math.min(at, Math.max(0, hits.length - 1));
+        box.innerHTML = hits.length ? hits.map((o, i) => `
+            <button type="button" class="rel-hit${i === at ? " on" : ""}" role="option" data-pick="${esc(o.id)}"
+                    aria-selected="${i === at}">
+              <span class="rel-ic">${ICON[(KINDS[o.kind] || {}).icon] || ICON.link}</span>
+              <span class="rel-name">${esc(o.name)}</span>
+              <small>${esc([(KINDS[o.kind] || {}).label, typeOf(o)].filter(Boolean).join(" · "))}</small>
+            </button>`).join("")
+            + (found.length > hits.length ? `<div class="rel-more">nog ${found.length - hits.length} — typ verder om te verfijnen</div>` : "")
+          : `<div class="rel-more">Niets gevonden</div>`;
+        box.classList.remove("hidden");
+        box.querySelectorAll("[data-pick]").forEach((b) => {
+          // Before the field loses focus, or the list is gone before the click lands.
+          b.onmousedown = (ev) => { ev.preventDefault(); link(b.dataset.pick); };
+        });
+      };
+      search.oninput = () => { at = 0; show(); };
+      search.onfocus = show;
+      search.onblur = () => box.classList.add("hidden");
+      search.onkeydown = (ev) => {
+        if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+          ev.preventDefault();
+          if (!hits.length) return;
+          at = (at + (ev.key === "ArrowDown" ? 1 : -1) + hits.length) % hits.length;
+          show();
+        } else if (ev.key === "Enter") {
+          ev.preventDefault();
+          if (hits[at]) link(hits[at].id);
+        } else if (ev.key === "Escape") {
+          search.value = "";
+          box.classList.add("hidden");
+        }
       };
     }
 

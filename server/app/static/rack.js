@@ -134,6 +134,10 @@ window.DocRack = function (ctx) {
     }
     let selected = null;        // { slot } or { holder, thing }
     let filter = "";
+    // How the equipment beside the cabinet is listed; remembered in this
+    // browser, and fine without it.
+    let sortBy = "type";
+    try { if (localStorage.getItem("rk-sort") === "name") sortBy = "name"; } catch (e) { /* not kept */ }
 
     const holds = (slot) => !!(data.passive[slot.kind] || {}).holds;
     const nameOf = (slot) => (slot.kind === "item"
@@ -224,10 +228,53 @@ window.DocRack = function (ctx) {
         </div>`;
     }
 
+    /* The customer's equipment by what it is, in the order a cabinet is
+       usually filled from the top: what the line comes in on, the switches,
+       then the servers and storage, then the rest. Within a type by name.
+       Or simply by name, for whoever knows what they are looking for. */
+    const TYPE_ORDER = ["Modem", "Firewall", "Router", "Switch", "Wifi-punt", "Server", "NAS", "NVR",
+                        "Desktop", "Laptop", "Tablet", "Printer", "Multifunctional", "Labelprinter", "Plotter"];
+
+    function typeOf(c) {
+      const spec = kinds[c.kind] || {};
+      const sub = (spec.subtypes || []).find((s) => s.role === c.role);
+      if (sub) return { key: `${c.kind}:${sub.role}`, label: sub.plural, icon: sub.icon, rank: TYPE_ORDER.indexOf(sub.role) };
+      return { key: c.kind, label: spec.subtypes ? `${spec.plural || c.kind} zonder soort` : (spec.plural || c.kind),
+               icon: spec.icon, rank: -1 };
+    }
+
+    function groupsOf(devices) {
+      const groups = new Map();
+      for (const c of devices) {
+        const t = typeOf(c);
+        if (!groups.has(t.key)) groups.set(t.key, { ...t, items: [] });
+        groups.get(t.key).items.push(c);
+      }
+      // Known types in cabinet order; types of your own after them, by name;
+      // what has no type yet last.
+      const place = (g) => (g.rank >= 0 ? g.rank : g.label.endsWith("zonder soort") ? 2000 : 1000);
+      return [...groups.values()].sort((a, b) => place(a) - place(b) || a.label.localeCompare(b.label, "nl"));
+    }
+
     function palette() {
       const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
-      const devices = data.candidates.filter((c) =>
-        words.every((w) => `${c.name} ${c.role}`.toLowerCase().includes(w)));
+      const devices = data.candidates.filter((c) => {
+        const t = typeOf(c);
+        return words.every((w) => `${c.name} ${c.role} ${t.label}`.toLowerCase().includes(w));
+      });
+      const pick = (c) => `
+            <div class="rk-pick" draggable="true" data-dev="${esc(c.id)}"
+                 title="${c.rack ? "19 inch: in de rails, of op een plank" : "Los: op een plank of de bodem"}">
+              <span class="rk-pick-ic">${ICON[(kinds[c.kind] || {}).icon] || ICON.box}</span>
+              <span class="rk-pick-name">${esc(c.name)}</span>
+              <span class="tag${c.rack ? "" : " on"}" title="${c.guessed ? "Geschat — stel het in bij het apparaat" : ""}">${formTag(c)}${c.guessed ? "?" : ""}</span></div>`;
+      const listed = !devices.length
+        ? `<div class="muted rk-none">${data.candidates.length ? "Niets gevonden" : "Alles staat al in deze kast"}</div>`
+        : sortBy === "name" ? devices.map(pick).join("")
+          : groupsOf(devices).map((g) => `<div class="rk-group" data-group="${esc(g.key)}">
+              <div class="rk-group-head"><span class="rk-pick-ic">${ICON[g.icon] || ICON.box}</span>
+                <span>${esc(g.label)}</span><span class="n">${g.items.length}</span></div>
+              ${g.items.map(pick).join("")}</div>`).join("");
       const rail = Object.entries(data.passive).map(([kind, p]) => `
         <div class="rk-pick" draggable="true" data-new="${kind}" title="Sleep in de kast${p.bottom ? " — altijd onderin" : ""}">
           <span class="rk-mini rk-${kind}"></span><span>${esc(p.label)}</span><span class="muted">${p.height}U</span></div>`).join("");
@@ -235,14 +282,14 @@ window.DocRack = function (ctx) {
         <div class="rk-pick" draggable="true" data-stand="${kind}" title="Sleep op een plank of de bodem">
           <span class="rk-mini rk-${kind}"></span><span>${esc(p.label)}</span><span class="muted">los</span></div>`).join("");
       return `<div class="rk-side-sec"><h3>Apparatuur van ${esc(org.name)}</h3>
-          <input class="inp" id="rk-filter" type="search" placeholder="Zoek…" value="${esc(filter)}" />
-          <div class="rk-picks">${devices.length ? devices.map((c) => `
-            <div class="rk-pick" draggable="true" data-dev="${esc(c.id)}"
-                 title="${c.rack ? "19 inch: in de rails, of op een plank" : "Los: op een plank of de bodem"}">
-              <span class="rk-pick-ic">${ICON[(kinds[c.kind] || {}).icon] || ICON.box}</span>
-              <span class="rk-pick-name">${esc(c.name)}</span>
-              <span class="tag${c.rack ? "" : " on"}" title="${c.guessed ? "Geschat — stel het in bij het apparaat" : ""}">${formTag(c)}${c.guessed ? "?" : ""}</span></div>`).join("")
-            : `<div class="muted rk-none">${data.candidates.length ? "Niets gevonden" : "Alles staat al in deze kast"}</div>`}</div>
+          <div class="rk-find">
+            <input class="inp" id="rk-filter" type="search" placeholder="Zoek…" value="${esc(filter)}" />
+            <div class="rk-sort" role="group" aria-label="Sorteren">
+              <button type="button" class="${sortBy === "type" ? "on" : ""}" data-sort="type" title="Gegroepeerd per soort">Soort</button>
+              <button type="button" class="${sortBy === "name" ? "on" : ""}" data-sort="name" title="Op naam, A–Z">Naam</button>
+            </div>
+          </div>
+          <div class="rk-picks">${listed}</div>
         </div>
         <div class="rk-side-sec"><h3>In de rails</h3><div class="rk-picks">${rail}</div></div>
         <div class="rk-side-sec"><h3>Los neerzetten</h3><div class="rk-picks">${loose}</div></div>`;
@@ -503,6 +550,14 @@ window.DocRack = function (ctx) {
         const height = slot && slot.kind === "item" ? slot.height : null;
         setForm(devId, form.value, form.value === data.forms[0] ? height : null);
       };
+
+      host.querySelectorAll("[data-sort]").forEach((b) => {
+        b.onclick = () => {
+          sortBy = b.dataset.sort;
+          try { localStorage.setItem("rk-sort", sortBy); } catch (e) { /* not kept */ }
+          paint();
+        };
+      });
 
       const search = host.querySelector("#rk-filter");
       if (search) search.oninput = () => {
