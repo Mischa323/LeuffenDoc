@@ -1610,6 +1610,16 @@ window.DocItems = function (ctx) {
       return revision.changes.every((c) => c.key === "naam" || own.includes(c.key));
     }
 
+    /* A change said in words, one step a line -- a cabinet arranged in one go
+       is a dozen of them, and the last few are the ones you look for. */
+    function said(text) {
+      const steps = String(text).split("; ");
+      const shown = steps.slice(-12);
+      const more = steps.length - shown.length;
+      return (more ? `<span class="muted">${more} eerdere stappen…</span>` : "")
+        + shown.map((s) => `<span>${esc(s)}</span>`).join("");
+    }
+
     async function drawHistory() {
       const slot = host.querySelector("#history");
       const revisions = await api(`/api/items/${item.id}/revisions`).catch(() => []);
@@ -1628,7 +1638,10 @@ window.DocItems = function (ctx) {
                 ? `<button class="btn ghost sm" data-revert="${r.id}">${ICON.restart} Terugdraaien</button>`
                 : ""}
             </div>
-            ${r.changes.map((c) => `<div class="rev-change">
+            ${r.changes.map((c) => c.said ? `<div class="rev-change">
+              <span class="rc-field">${esc(c.label)}</span>
+              <span class="rc-said">${said(c.said)}</span>
+            </div>` : `<div class="rev-change">
               <span class="rc-field">${esc(c.label)}</span>
               <span class="rc-from">${c.from ? esc(short(c.from)) : "leeg"}</span>
               <span class="rc-arrow">→</span>

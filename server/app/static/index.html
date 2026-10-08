@@ -212,6 +212,39 @@
     .rk-where { margin-left: 8px; cursor: pointer; gap: 4px; text-transform: none; letter-spacing: 0; }
     .rk-where svg { width: 11px; height: 11px; }
     #rack-view > * { margin-bottom: 14px; }
+    /* What stands: on a shelf (with its brackets) or on the bottom of the cabinet. */
+    .rk-holder { order: 1; flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: flex-end; }
+    .rk-floor { background: linear-gradient(transparent, rgba(0, 0, 0, .3)); }
+    .rk-things { flex: 1; display: flex; align-items: flex-end; gap: 6px; padding: 0 10px; min-height: 0; overflow: hidden; }
+    .rk-plank { height: 8px; flex: none; position: relative; background: linear-gradient(#5b616b, #3a3f47);
+                border-top: 1px solid #8a909a; }
+    .rk-floor .rk-plank { height: 10px; background: linear-gradient(#2e3238, #1c1f23); border-top-color: #4a5058; }
+    .rk-plank-name { position: absolute; right: 8px; top: -1px; font-size: 8px; line-height: 10px; color: #c9ced6;
+                     letter-spacing: .04em; text-transform: uppercase; }
+    .rk-holder-empty { margin: auto; padding-bottom: 4px; font-size: 11px; color: #7d8594; }
+    .rk-slot.drop-on { outline: 2px dashed #36c262; outline-offset: -2px; }
+    .rk-thing { flex: 0 1 auto; position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px;
+                padding: 4px 3px 3px; border-radius: 3px 3px 1px 1px; border: 1px solid #555b65; cursor: pointer;
+                overflow: hidden; background: linear-gradient(#3b4048, #2a2e35); min-width: 34px; }
+    .rk-thing:hover { filter: brightness(1.15); }
+    .rk-thing.sel { outline: 2px solid var(--accent); outline-offset: 1px; z-index: 2; }
+    .rk-thing-name { font: 600 9.5px/1.1 var(--font, sans-serif); color: #e4e8ef; text-align: center; max-width: 100%;
+                     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rk-thing .rk-leds { margin-top: auto; }
+    .rk-thing .rk-lcd { margin: 2px 0 0; }
+    .rk-st-modem, .rk-st-printer { background: linear-gradient(#f2f3f5, #d6d9de); border-color: #a9afb8; }
+    .rk-st-modem .rk-thing-name, .rk-st-printer .rk-thing-name { color: #22262d; }
+    .rk-st-ups { background: linear-gradient(#2a2d33, #17191c); }
+    .rk-st-nas { background: linear-gradient(#2c3036, #1f2226); }
+    .rk-st-tower { background: linear-gradient(#3a3f47, #25282e); }
+    .rk-st-net { background: linear-gradient(#2f4058, #22324a); }
+    .rk-st-bays { display: grid; grid-template-columns: repeat(2, 1fr); gap: 2px; width: 82%; flex: 1; min-height: 0; }
+    .rk-st-bays i { background: #121417; border: 1px solid #50565f; border-radius: 1px; }
+    .rk-st-ports { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; width: 92%; height: 7px; }
+    .rk-st-ports i { background: #0d0f12; border: 1px solid #50565f; }
+    .rk-mini.rk-floor { height: 6px; background: #2e3238; }
+    .rk-mini.rk-ups_box { width: 14px; height: 18px; }
+    .rk-mini.rk-box { width: 22px; height: 12px; background: #d6d9de; }
     /* Scrolled to (a copy being made): clear of the bar that stays at the top. */
     #new-item { scroll-margin-top: 84px; }
     /* The sections under an item's blocks, spaced like the blocks themselves. */
@@ -239,6 +272,7 @@
     .rc-from { color: var(--text-faint); text-decoration: line-through; }
     .rc-arrow { color: var(--text-faint); }
     .rc-to { font-weight: 550; }
+    .rc-said { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
 
     /* ---- what runs out soon ---- */
     .due-list { margin-top: 8px; display: grid; gap: 5px; }

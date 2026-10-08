@@ -813,17 +813,28 @@ async def save_rack(item_id: str, request: Request, user: dict = Depends(auth.cu
     # Something shut off to this person stays where it is: they cannot see it,
     # so the page could not have sent it back -- and may not put it anywhere.
     kept = [s for s in before if s.get("kind") == "item" and s.get("item") in hidden]
-    sent = [s for s in (body.get("slots") or []) if not (s.get("kind") == "item" and s.get("item") in hidden)]
+    sent = [dict(s) for s in (body.get("slots") or [])
+            if not (s.get("kind") == "item" and s.get("item") in hidden)]
+    # The same for what stands on a shelf or the bottom: it stays on it.
+    standing_hidden = {s["id"]: [t for t in s.get("items") or [] if t.get("item") in hidden]
+                       for s in before if any(t.get("item") in hidden for t in s.get("items") or [])}
+    for s in sent:
+        if rack.PASSIVE.get(s.get("kind"), {}).get("holds"):
+            s["items"] = [t for t in s.get("items") or [] if t.get("item") not in hidden] \
+                + standing_hidden.pop(s.get("id"), [])
+    if standing_hidden:
+        raise HTTPException(status_code=400, detail="Daar staat ook iets op dat je niet mag zien; "
+                                                    "die plank of bodem kan er niet uit")
     try:
         slots = rack.clean(item, sent + kept, items)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     database.save_rack_slots(item_id, slots, by=user["email"])
-    shape = lambda ss: sorted((s.get("kind"), s.get("item"), s.get("at"), s.get("height")) for s in ss)  # noqa: E731
-    if shape(before) != shape(slots):
-        database.record(item_id, "updated", [{"key": "kast", "label": "Indeling",
-                                              "from": f"{len(before)} onderdelen" if before else "",
-                                              "to": f"{len(slots)} onderdelen"}], by=user["email"])
+    said = rack.changes(before, slots, items)
+    if said:
+        # Somebody arranging a cabinet makes many small changes in a row; they
+        # are one line in its history, not a line per drag.
+        database.record_or_extend(item_id, "kast", "Indeling", "; ".join(said), by=user["email"])
     return rack.view(item, items, hidden)
 
 

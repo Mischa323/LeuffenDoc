@@ -1147,6 +1147,27 @@ def delete_attachment(attachment_id: str) -> None:
         conn.execute("DELETE FROM attachments WHERE id=?", (attachment_id,))
 
 
+def record_or_extend(item_id: str, key: str, label: str, text: str, by: str | None,
+                     window: float = 300) -> None:
+    """One line of history for a run of small changes: when the newest line of
+    this item is the same kind of change by the same person, made in the last
+    few minutes, it is extended instead of followed by another."""
+    last = row("SELECT id, at, user_email, changes_json FROM revisions WHERE item_id=? "
+               "ORDER BY at DESC, id DESC LIMIT 1", (item_id,))
+    if last and last["user_email"] == by and time.time() - last["at"] <= window:
+        changes = json.loads(last["changes_json"] or "[]")
+        if len(changes) == 1 and changes[0].get("key") == key and changes[0].get("said"):
+            # The latest steps are kept; a whole afternoon of them is not.
+            changes[0]["said"] = "; ".join(f"{changes[0]['said']}; {text}".split("; ")[-40:])
+            with write() as conn:
+                conn.execute("UPDATE revisions SET changes_json=?, at=? WHERE id=?",
+                             (json.dumps(changes), time.time(), last["id"]))
+            return
+    # Said in words rather than as an old and a new value: there is no field
+    # to write back, so it is not something to undo either.
+    record(item_id, "updated", [{"key": key, "label": label, "said": text}], by=by)
+
+
 def rack_slots(rack_id: str) -> list:
     r = row("SELECT slots_json FROM rack_layouts WHERE rack_id=?", (rack_id,))
     return json.loads(r["slots_json"]) if r else []
@@ -1162,14 +1183,18 @@ def save_rack_slots(rack_id: str, slots: list, by: str | None) -> None:
 
 
 def racks_holding(item_id: str) -> list:
-    """The cabinets something hangs in, and where."""
+    """The cabinets something hangs or stands in, and where: `on` names the
+    shelf or bottom it stands on, and is empty for the rails."""
     out = []
-    for r in rows("SELECT l.rack_id, i.name, i.org_id, j.value AS slot FROM rack_layouts l "
-                  "JOIN items i ON i.id = l.rack_id, json_each(l.slots_json) j "
-                  "WHERE json_extract(j.value, '$.item') = ?", (item_id,)):
-        slot = json.loads(r["slot"])
-        out.append({"rack_id": r["rack_id"], "rack_name": r["name"], "org_id": r["org_id"],
-                    "at": slot.get("at"), "height": slot.get("height")})
+    for r in rows("SELECT l.rack_id, l.slots_json, i.name, i.org_id FROM rack_layouts l "
+                  "JOIN items i ON i.id = l.rack_id"):
+        for slot in json.loads(r["slots_json"] or "[]"):
+            standing = any(t.get("item") == item_id for t in slot.get("items") or [])
+            if slot.get("item") == item_id or standing:
+                out.append({"rack_id": r["rack_id"], "rack_name": r["name"], "org_id": r["org_id"],
+                            "at": slot.get("at"), "height": slot.get("height"),
+                            "on": (slot.get("label") or ("bodem" if slot.get("kind") == "floor" else "plank"))
+                            if standing else ""})
     return out
 
 

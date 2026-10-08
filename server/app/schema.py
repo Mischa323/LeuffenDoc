@@ -38,9 +38,23 @@ from . import database
 # belongs in one place.
 STATUS = ["In gebruik", "Reserve", "In reparatie"]
 
+# Whether equipment hangs in the rails of a patch cabinet, or stands -- on a
+# shelf or the bottom of it (see rack.py).
+RACK_FORMS = ["19 inch (U)", "Los / staand"]
+
 
 def _f(key, label, type="text", **extra):
     return {"key": key, "label": label, "type": type, **extra}
+
+
+def _rack_fields() -> list:
+    return [
+        _f("rackmount", "Formaat", "select", options=RACK_FORMS, icon="rack",
+           hint="Hangt het in de rails van een patchkast, of staat het op een plank of de bodem? "
+                "Leeg: zoals zoiets meestal is."),
+        _f("rack_units", "Hoogte in een rack (U)", "number",
+           hint="Alleen bij 19 inch: hoeveel units het hoog is."),
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -76,6 +90,7 @@ COMPUTER = {
             _f("model", "Model", rmm="model", icon="box"),
             _f("serial", "Serienummer", rmm="serial", icon="clipboard"),
             _f("vm_state", "In Hyper-V", rmm="vm_state", icon="layers"),
+            *_rack_fields(),
         ]},
         {"key": "beheer", "label": "Beheer", "fields": [
             _f("installed_at", "Geïnstalleerd op", "date"),
@@ -114,6 +129,7 @@ NETWORK = {
             _f("serial", "Serienummer", rmm="serial"),
             _f("firmware", "Firmware", icon="package"),
             _f("mgmt_ip", "Beheeradres", "ip", icon="globe"),
+            *_rack_fields(),
         ]},
         {"key": "beheer", "label": "Beheer", "fields": [
             _f("installed_at", "Geïnstalleerd op", "date"),
@@ -150,6 +166,7 @@ PRINTER = {
             _f("mgmt_ip", "Beheeradres", "ip"),
             _f("supplies", "Verbruiksartikelen",
                hint="Welke toner of cartridge erin gaat."),
+            *_rack_fields(),
         ]},
         {"key": "beheer", "label": "Beheer", "fields": [
             _f("installed_at", "Geïnstalleerd op", "date"),
