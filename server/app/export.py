@@ -39,10 +39,10 @@ def _date(value) -> str:
     return f"{on.day}-{on.month}-{on.year}"
 
 
-def raw_value(item: dict, field: dict):
+def raw_value(item: dict, field: dict, held: set):
     """What the page shows for a field: the RMM's figure where the RMM keeps
-    it, the typed value otherwise."""
-    if field.get("rmm"):
+    it (``held``, see schema.rmm_held), the typed value otherwise."""
+    if field.get("rmm") and field["rmm"] in held:
         return (item.get("rmm") or {}).get(field["rmm"])
     return item["fields"].get(field["key"])
 
@@ -88,14 +88,15 @@ def gather(org: dict, hidden: set, with_passwords: bool) -> tuple[dict, list]:
     for item in items:
         spec = kinds.get(item["kind"], {})
         fields = []
+        held = schema.rmm_held(item)
         for key, field in schema.shown_fields_of(item["kind"]).items():
             if field["type"] == "secret":
                 continue
-            value = raw_value(item, field)
+            value = raw_value(item, field, held)
             shown = text(field, value, names)
             if shown:
                 fields.append({"key": key, "label": field["label"], "value": shown, "raw": value,
-                               "from_rmm": bool(field.get("rmm")),
+                               "from_rmm": bool(field.get("rmm")) and field["rmm"] in held,
                                "multiline": field["type"] in ("textarea", "long", "list")})
         record = {
             "id": item["id"], "kind": item["kind"], "kind_label": spec.get("label", item["kind"]),

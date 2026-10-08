@@ -645,7 +645,8 @@ async def edit_item(item_id: str, request: Request,
     fields = body.get("fields")
     updated = database.update_item(
         item_id, name=name,
-        fields=schema.clean_form(item["kind"], fields) if fields is not None else None,
+        fields=(schema.clean_form(item["kind"], fields, schema.rmm_held(item))
+                if fields is not None else None),
         by=user["email"], label=_labeller(item["kind"]))
     database.audit("item.update", user_email=user["email"], org_id=item["org_id"],
                    target=updated["name"], ip=auth.client_ip(request))
@@ -885,7 +886,7 @@ def revert_revision(revision_id: int, request: Request,
         else:
             fields[change["key"]] = change["from"] or ""
     updated = database.update_item(item["id"], name=name,
-                                   fields=schema.clean_form(item["kind"], fields),
+                                   fields=schema.clean_form(item["kind"], fields, schema.rmm_held(item)),
                                    by=user["email"], label=_labeller(item["kind"]))
     database.audit("item.revert", user_email=user["email"], org_id=item["org_id"],
                    target=item["name"], detail=f"wijziging {revision_id}",

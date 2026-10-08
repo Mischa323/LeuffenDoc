@@ -127,8 +127,8 @@ NETWORK = {
             _f("manufacturer", "Merk", rmm="manufacturer"),
             _f("model", "Model", rmm="model"),
             _f("serial", "Serienummer", rmm="serial"),
-            _f("firmware", "Firmware", icon="package"),
-            _f("mgmt_ip", "Beheeradres", "ip", icon="globe"),
+            _f("firmware", "Firmware", icon="package", rmm="firmware"),
+            _f("mgmt_ip", "Beheeradres", "ip", icon="globe", rmm="mgmt_ip"),
             *_rack_fields(),
         ]},
         {"key": "beheer", "label": "Beheer", "fields": [
@@ -602,18 +602,34 @@ def ref_fields() -> dict:
             for name in KINDS_all()}
 
 
-def clean(name: str, values: dict) -> dict:
+def rmm_held(item: dict | None) -> set:
+    """Which of an item's fields the RMM fills -- for this item, not for its
+    kind. A switch somebody documented by hand has a model like any other
+    field; one that comes from UniFi has the model UniFi reports. A machine
+    with an agent gets them all; what else comes from the RMM says which (the
+    ``holds`` in what it reports), so a field it knows nothing about -- the
+    serial number of a UniFi switch -- stays yours to fill in."""
+    if not item or item.get("source") != "rmm" or not item.get("rmm_device_id"):
+        return set()
+    payload = item.get("rmm") or {}
+    if isinstance(payload.get("holds"), list):
+        return set(payload["holds"])
+    return {f["rmm"] for f in fields_of(item["kind"]).values() if f.get("rmm")}
+
+
+def clean(name: str, values: dict, held: set | frozenset = frozenset()) -> dict:
     """Keep what the kind actually has, drop the rest.
 
-    Fields the RMM fills are refused here as well: accepting them would let a
-    typed value sit underneath a synced one, invisible until the link is
-    removed and the old value suddenly reappears.
+    Fields the RMM fills for this item (``held``, see :func:`rmm_held`) are
+    refused here as well: accepting them would let a typed value sit underneath
+    a synced one, invisible until the link is removed and the old value
+    suddenly reappears.
     """
     known = fields_of(name)
     out = {}
     for key, value in (values or {}).items():
         spec = known.get(key)
-        if not spec or spec.get("rmm"):
+        if not spec or (spec.get("rmm") and spec["rmm"] in held):
             continue
         # A secret is never a field value: it does not travel with the item and
         # it does not go into the history, so a form cannot set one this way.
@@ -660,18 +676,19 @@ def clean(name: str, values: dict) -> dict:
     return out
 
 
-def clean_form(name: str, values: dict) -> dict:
+def clean_form(name: str, values: dict, held: set | frozenset = frozenset()) -> dict:
     """What a form sent, ready to store -- emptying a field included.
 
     :func:`clean` drops empty values, which is right when reading a payload but
     wrong for a form: a field the person deliberately cleared arrives empty and
     has to stay empty, or the old value silently comes back.
     """
-    out = clean(name, values)
+    out = clean(name, values, held)
     known = fields_of(name)
     for key, value in (values or {}).items():
         spec = known.get(key)
-        if spec and not spec.get("rmm") and spec["type"] != "secret" and key not in out:
+        if spec and not (spec.get("rmm") and spec["rmm"] in held) and spec["type"] != "secret" \
+                and key not in out:
             out[key] = ""
     return out
 

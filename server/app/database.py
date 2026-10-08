@@ -583,6 +583,24 @@ def item_by_rmm_device(device_id: str) -> dict | None:
     return _item_out(r) if r else None
 
 
+def unlinked_twin(org_id: str, kind: str, name: str, mac: str) -> dict | None:
+    """Something documented by hand that turns out to be a device the RMM now
+    reports: the same customer and kind, not mirrored from the RMM yet, in use,
+    and the same name or an adapter with this MAC address (``mac`` as twelve
+    hex digits)."""
+    r = row("SELECT * FROM items i WHERE org_id=? AND kind=? AND rmm_device_id IS NULL AND archived=0 "
+            "AND (LOWER(name)=LOWER(?) OR EXISTS (SELECT 1 FROM adapters a WHERE a.item_id=i.id "
+            "AND LOWER(REPLACE(REPLACE(REPLACE(a.mac, ':', ''), '-', ''), '.', ''))=?)) "
+            "ORDER BY created_at LIMIT 1", (org_id, kind, name.strip(), mac))
+    return _item_out(r) if r else None
+
+
+def link_rmm(item_id: str, device_id: str) -> None:
+    """From now on this item mirrors that device in the RMM."""
+    with write() as conn:
+        conn.execute("UPDATE items SET source='rmm', rmm_device_id=? WHERE id=?", (device_id, item_id))
+
+
 def count_items(org_id: str) -> dict:
     """How many of each kind a customer has, for the overview."""
     return {r["kind"]: r["n"] for r in
@@ -947,10 +965,14 @@ def sync_adapters(item_id: str, nics: list) -> None:
     """
     existing = {(a["mac"] or "").lower(): a for a in
                 rows("SELECT * FROM adapters WHERE item_id=? AND source='rmm'", (item_id,))}
+    # An adapter somebody typed in with this MAC is this one already -- and may
+    # be patched into a port. It is left as it is rather than doubled.
+    typed = {(a["mac"] or "").lower() for a in
+             rows("SELECT mac FROM adapters WHERE item_id=? AND source!='rmm'", (item_id,))}
     seen = set()
     for nic in nics or []:
         mac = (nic.get("mac") or "").lower()
-        if not mac:
+        if not mac or mac in typed:
             continue                      # without a MAC there is nothing to match on
         seen.add(mac)
         values = {"name": nic.get("name") or "", "mac": nic.get("mac") or "",

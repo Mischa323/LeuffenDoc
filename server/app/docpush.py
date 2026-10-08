@@ -174,8 +174,9 @@ def wanted() -> dict:
     today = datetime.date.today()
     by_org: dict[str, list] = {}
     for item in database.rmm_items():
-        # A Hyper-V guest is no device in the RMM; it shows on its host's page.
-        if not item.get("rmm_gone") and not str(item["rmm_device_id"]).startswith(rmm.VM_PREFIX):
+        # A Hyper-V guest is no device in the RMM (it shows on its host's page),
+        # and neither is a UniFi switch: neither has a Docs tab there.
+        if not item.get("rmm_gone") and rmm.agent_device(item["rmm_device_id"]):
             by_org.setdefault(item["org_id"], []).append(item)
     refs = schema.ref_fields()
     out = {}

@@ -188,9 +188,11 @@ def sync() -> dict:
                          detail=f"gebruikers en klanten gelukt, apparaten niet: {_explain(exc)}")
         return last_sync
     last_sync.update(at=time.time(), ok=True, detail="gelukt",
-                     users=len(users), orgs=len(orgs), devices=devices["devices"])
+                     users=len(users), orgs=len(orgs), devices=devices["devices"],
+                     network=devices["network"])
+    unifi = "" if devices["network"] is None else f", {devices['network']} uit UniFi"
     database.audit("rmm.sync", detail=f"{len(users)} gebruikers, {len(orgs)} klanten, "
-                                      f"{devices['devices']} apparaten "
+                                      f"{devices['devices']} apparaten{unifi} "
                                       f"({devices['new']} nieuw, {devices['gone']} verdwenen)")
     return last_sync
 
@@ -339,6 +341,101 @@ def _runs_on(item_id: str, host_item_id: str, always: bool, label) -> None:
                              source="rmm", label=label)
 
 
+# --------------------------------------------------------------------------- #
+# Network equipment from UniFi
+#
+# The RMM watches a customer's UniFi gateways, switches and access points
+# through their UniFi account, without an agent on any of them. Each becomes a
+# network device at that customer, known by its MAC address, so a renamed or
+# re-adopted switch is the same page. What UniFi knows -- the make, the model,
+# the firmware, the management address -- is shown from it and kept in step;
+# the serial number, where it hangs, the warranty are yours. A switch that was
+# documented by hand before, under the same name or with this MAC on one of its
+# adapters, is taken over rather than doubled.
+# --------------------------------------------------------------------------- #
+NET_PREFIX = "unifi:"
+# The fields UniFi fills; a firmware update or another address is history.
+NET_KEYS = ["manufacturer", "model", "firmware", "mgmt_ip"]
+_NET_ROLES = {"gateway": "Router", "switch": "Switch", "ap": "Wifi-punt"}
+
+
+def agent_device(device_id: str) -> bool:
+    """Whether this is a device in the RMM with an agent -- not a Hyper-V
+    guest, not network equipment -- and so a device page there."""
+    return not str(device_id).startswith((VM_PREFIX, NET_PREFIX))
+
+
+def _hex_mac(mac) -> str:
+    return "".join(c for c in str(mac or "").lower() if c in "0123456789abcdef")
+
+
+def fetch_network_devices() -> list | None:
+    """None from an RMM that does not list them yet."""
+    with _client() as client:
+        r = client.get(f"{base_url()}/api/v1/network-devices")
+    if r.status_code == 404:
+        return None
+    r.raise_for_status()
+    return r.json().get("devices", [])
+
+
+def network_payload(device: dict) -> dict:
+    return {"manufacturer": "Ubiquiti", "model": device.get("model") or "",
+            "firmware": device.get("firmware") or "", "mgmt_ip": device.get("ip") or "",
+            # Only these come from UniFi; the rest of the page is typed.
+            "holds": NET_KEYS,
+            "source": "unifi", "mac": device.get("mac") or "", "state": device.get("state") or "",
+            "online": device.get("state") == "online", "clients": device.get("clients"),
+            "uptime": device.get("uptime"), "console": device.get("console") or "",
+            "account": device.get("account") or "", "uplink_mac": device.get("uplink_mac") or "",
+            "last_seen": device.get("seen_at")}
+
+
+def sync_network(by_rmm_org: dict) -> dict | None:
+    """Mirror the UniFi equipment into the right customers. None when the RMM
+    is too old to say what it has -- which is not the same as having none."""
+    devices = fetch_network_devices()
+    if devices is None:
+        return None
+    label = lambda key: schema.label_of("network", key)     # noqa: E731
+    seen: set = set()
+    made = 0
+    for device in devices:
+        org_id = by_rmm_org.get((device.get("org") or {}).get("id"))
+        mac = _hex_mac(device.get("mac"))
+        if not org_id or len(mac) != 12:
+            continue
+        key = NET_PREFIX + mac
+        if key in seen:
+            continue
+        seen.add(key)
+        payload = network_payload(device)
+        name = (device.get("name") or "").strip() or device.get("model") or mac
+        # The management address as an adapter: the MAC is searchable, and an
+        # access point can be patched into a switch port like anything else.
+        nics = [{"name": "Beheer", "mac": ":".join(mac[i:i + 2] for i in range(0, 12, 2)),
+                 "ipv4": [device["ip"]] if device.get("ip") else []}]
+        existing = database.item_by_rmm_device(key)
+        if not existing:
+            twin = database.unlinked_twin(org_id, "network", name, mac)
+            if twin:
+                database.link_rmm(twin["id"], key)
+                existing = twin
+        if existing:
+            database.update_item(existing["id"], rmm=payload, rmm_keys=NET_KEYS,
+                                 by=None, source="rmm", label=label)
+            database.sync_adapters(existing["id"], nics)
+            continue
+        fields = {"status": "In gebruik"}
+        if _NET_ROLES.get(device.get("type")):
+            fields["role"] = _NET_ROLES[device["type"]]
+        item = database.create_item(org_id, "network", name, fields, by=None, source="rmm",
+                                    rmm_device_id=key, rmm=payload, label=label)
+        database.sync_adapters(item["id"], nics)
+        made += 1
+    return {"seen": seen, "devices": len(seen), "new": made}
+
+
 def sync_devices() -> dict:
     """Mirror every device the API key can see into the right customer."""
     devices = fetch_devices()
@@ -418,15 +515,30 @@ def sync_devices() -> dict:
                                      rmm=payload, label=label)
                 vms_made += 1
 
+    # The UniFi equipment has its own round: when it fails, or the RMM is too
+    # old to list it, the machines above still arrive -- and nothing from
+    # UniFi is called gone just because this round said nothing.
+    try:
+        network = sync_network(by_rmm_org)
+    except Exception as exc:
+        log.warning("syncing network equipment from the RMM failed: %r", exc)
+        network = None
+
     # A device that is no longer in the RMM keeps its page and says so. It is
     # never removed here: what was documented about it is usually exactly what
     # somebody needs afterwards. The same for a VM its host no longer reports.
     gone = 0
     for item in database.rmm_items():
-        missing = item["rmm_device_id"] not in seen
+        if str(item["rmm_device_id"]).startswith(NET_PREFIX):
+            if network is None:
+                continue
+            missing = item["rmm_device_id"] not in network["seen"]
+        else:
+            missing = item["rmm_device_id"] not in seen
         if missing != item["rmm_gone"]:
             database.mark_rmm_gone(item["id"], missing)
         if missing:
             gone += 1
-    return {"devices": device_count, "new": made + vms_made, "updated": updated,
-            "gone": gone, "vms": vms}
+    return {"devices": device_count, "new": made + vms_made + (network or {}).get("new", 0),
+            "updated": updated, "gone": gone, "vms": vms,
+            "network": None if network is None else network["devices"]}

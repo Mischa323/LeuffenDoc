@@ -90,9 +90,18 @@ window.DocItems = function (ctx) {
 
   /* Where a value comes from decides who may set it. A field the RMM fills is
      shown from the RMM and never typed here, so a documented memory size cannot
-     quietly disagree with the machine. */
+     quietly disagree with the machine -- but only for something that comes from
+     the RMM, and only what the RMM says it holds for it (a UniFi switch has no
+     serial number there). A switch typed in by hand has a model like any other
+     field. The server decides the same way (schema.rmm_held). */
+  function held(item, field) {
+    if (!field.rmm || !item || item.source !== "rmm" || !item.rmm_device_id) return false;
+    const holds = (item.rmm || {}).holds;
+    return Array.isArray(holds) ? holds.includes(field.rmm) : true;
+  }
+
   function valueOf(item, field) {
-    if (field.rmm) return (item.rmm || {})[field.rmm] ?? "";
+    if (held(item, field)) return (item.rmm || {})[field.rmm] ?? "";
     return item.fields[field.key] ?? "";
   }
 
@@ -140,9 +149,9 @@ window.DocItems = function (ctx) {
     return esc(text) + (flag ? ` <span class="tag ${flag.kind}">${esc(flag.text)}</span>` : "");
   }
 
-  function inputFor(field, value, all, orgId) {
+  function inputFor(field, value, all, orgId, fromRmm) {
     const id = `f-${field.key}`;
-    if (field.rmm) {
+    if (fromRmm) {
       return `<div class="rmm-val">${value === "" ? "<span class=\"muted\">niet bekend</span>" : esc(value)}
               <span class="tag">uit de RMM</span></div>`;
     }
@@ -243,7 +252,7 @@ window.DocItems = function (ctx) {
           ${fields.map((f) => `<div class="frow">
             <label for="f-${f.key}">${f.icon && ICON[f.icon]
               ? `<span class="lb-ic">${ICON[f.icon]}</span>` : ""}${esc(f.label)}</label>
-            ${inputFor(f, item ? valueOf(item, f) : ((prefill || {})[f.key] || ""), all, orgId)}
+            ${inputFor(f, item ? valueOf(item, f) : ((prefill || {})[f.key] || ""), all, orgId, held(item, f))}
             ${f.hint ? `<div class="hint">${esc(f.hint)}</div>` : ""}
           </div>`).join("")}
         </div>
@@ -349,7 +358,7 @@ window.DocItems = function (ctx) {
     const hay = (i) => {
       const parts = [i.name];
       for (const f of shownFieldsOf(i.kind)) {
-        const v = f.rmm ? (i.rmm || {})[f.rmm] : (i.fields || {})[f.key];
+        const v = held(i, f) ? (i.rmm || {})[f.rmm] : (i.fields || {})[f.key];
         if (v === undefined || v === null || v === "") continue;
         if (f.type === "ref") parts.push((byId[v] || {}).name || "");
         else if (Array.isArray(v)) v.forEach((e) => parts.push(e && typeof e === "object" ? `${e.label || ""} ${e.value || ""}` : String(e)));
@@ -610,7 +619,7 @@ window.DocItems = function (ctx) {
                 <span>${esc(e.value)}</span></div>`).join("")
             : cell(item, f, all);
         return `<div class="dt">${f.icon && ICON[f.icon] ? `<span class="dt-ic">${ICON[f.icon]}</span>` : ""}
-                  <span>${esc(f.label)}</span>${f.rmm ? ' <span class="tag sm">RMM</span>' : ""}</div>
+                  <span>${esc(f.label)}</span>${held(item, f) ? ' <span class="tag sm">RMM</span>' : ""}</div>
                 <div class="dd">${ref}</div>`;
       }).join("");
       if (!rows && !long.length) return "";
@@ -623,6 +632,39 @@ window.DocItems = function (ctx) {
         <div>Nog niets ingevuld</div>
         <div style="font-size:12.5px;margin-top:6px">Druk op <b>Bewerken</b> om de velden in te vullen.</div>
       </div></div>`;
+
+    /* What UniFi says about a network device right now: whether it is up, how
+       many are on it, which console it belongs to and what it hangs on. It
+       changes all day, so it is shown rather than written into the history. */
+    const unifiHtml = () => {
+      const u = item.rmm || {};
+      if (item.source !== "rmm" || u.source !== "unifi") return "";
+      const hex = (m) => String(m || "").toLowerCase().replace(/[^0-9a-f]/g, "");
+      const up = u.uplink_mac ? all.find((i) => i.rmm_device_id === `unifi:${hex(u.uplink_mac)}`) : null;
+      const state = { online: ["ok", "online"], offline: ["warn", "offline"], pending: ["", "wordt bijgewerkt"] }[u.state]
+        || ["", u.state || "onbekend"];
+      const uptime = (s) => {
+        const n = Number(s);
+        if (!n) return "";
+        const d = Math.floor(n / 86400), h = Math.floor((n % 86400) / 3600);
+        return d ? `${d} ${d === 1 ? "dag" : "dagen"}${h ? `, ${h} uur` : ""}` : `${h || 1} uur`;
+      };
+      const rows = [
+        ["Status", `<span class="tag ${state[0]}">${esc(state[1])}</span>`],
+        u.clients !== null && u.clients !== undefined && u.clients !== "" ? ["Verbonden clients", esc(String(u.clients))] : null,
+        up ? ["Hangt aan", `<a data-goto="${esc(up.id)}">${esc(up.name)}</a>`]
+           : u.uplink_mac ? ["Hangt aan", `<span class="mono">${esc(u.uplink_mac)}</span>`] : null,
+        u.mac ? ["MAC-adres", `<span class="mono">${esc(u.mac)}</span>`] : null,
+        u.console ? ["Console", esc(u.console)] : null,
+        uptime(u.uptime) ? ["Aan sinds", esc(uptime(u.uptime))] : null,
+        u.last_seen ? ["Gezien door de RMM", esc(when(u.last_seen))] : null,
+      ].filter(Boolean);
+      return `<div class="panel" id="unifi">
+          <div class="panel-head"><h2>UniFi</h2>
+            <span class="sub">Zoals de RMM het ziet${u.account ? ` · ${esc(u.account)}` : ""}</span></div>
+          <div class="deflist">${rows.map(([k, v]) => `<div class="dt"><span>${k}</span></div><div class="dd">${v}</div>`).join("")}</div>
+        </div>`;
+    };
 
     const draw = async () => {
       const goneNote = item.rmm_gone ? `<div class="callout warn" style="margin-bottom:14px">
@@ -646,6 +688,7 @@ window.DocItems = function (ctx) {
              <div class="form-foot"><button class="btn ghost" id="edit-cancel">Annuleren</button>
                <button class="btn" id="edit-save">${ICON.save} Opslaan</button></div>`
                    : readBlocks()
+                     + unifiHtml()
                      + (item.kind === "rack" ? `<div id="rack-view"></div>` : "")
                      + `<div id="files"></div>`
                      + `<div id="secret"></div><div id="access"></div>`
@@ -1689,7 +1732,7 @@ window.DocItems = function (ctx) {
     const prefill = { __kind: item.kind, __name: `${item.name} (kopie)`,
                       __from: item.name, __copyOf: item.id };
     for (const f of shownFieldsOf(item.kind)) {
-      if (f.rmm || f.type === "secret") continue;
+      if (held(item, f) || f.type === "secret") continue;
       const value = item.fields[f.key];
       if (value === undefined || value === null || value === "" || (Array.isArray(value) && !value.length)) continue;
       prefill[f.key] = value;
