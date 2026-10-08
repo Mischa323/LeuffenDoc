@@ -687,14 +687,21 @@ window.DocItems = function (ctx) {
              ${adaptersFormHtml()}${portsFormHtml()}
              <div class="form-foot"><button class="btn ghost" id="edit-cancel">Annuleren</button>
                <button class="btn" id="edit-save">${ICON.save} Opslaan</button></div>`
-                   : readBlocks()
+                   // What the thing is on the left; on the right, what hangs
+                   // off it -- its files, its passwords, what it is linked to
+                   // and what changed -- the way IT Glue lays out a page. A
+                   // cabinet needs the width for its front and the parts
+                   // beside it, so there the rest comes underneath.
+                   : (item.kind === "rack" ? readBlocks() + `<div id="rack-view"></div>` : "")
+                     + `<div class="item-cols${item.kind === "rack" ? " solo" : ""}"><div class="item-main">`
+                     + (item.kind === "rack" ? "" : readBlocks())
                      + unifiHtml()
-                     + (item.kind === "rack" ? `<div id="rack-view"></div>` : "")
-                     + `<div id="files"></div>`
                      + `<div id="secret"></div><div id="access"></div>`
                      + `<div id="adapters"></div><div id="ports"></div>`
-                     + `<div id="passwords"></div><div id="referred"></div>`
-                     + `<div id="related"></div><div id="history"></div>`);
+                     + `</div><aside class="item-side">`
+                     + `<div id="files"></div><div id="passwords"></div>`
+                     + `<div id="related"></div><div id="referred"></div><div id="history"></div>`
+                     + `</aside></div>`);
       wireHead();
       const goneBtn = host.querySelector("#gone-archive");
       if (goneBtn) goneBtn.onclick = () => host.querySelector("#btn-archive").click();
@@ -811,9 +818,9 @@ window.DocItems = function (ctx) {
               <a class="lay-ib" href="/api/attachments/${esc(f.id)}/file?download=1" title="Downloaden">${ICON.download}</a>
               ${mayEdit ? `<button type="button" class="lay-ib" data-del="${esc(f.id)}" title="Verwijderen">${ICON.trash}</button>` : ""}
             </div>`).join("")}</div>` : ""}
-          ${mayEdit ? `<div class="files-hint">${files.length ? "Sleep er meer hierheen"
-              : "<b>Sleep foto's of bestanden hierheen</b>"}, plak een schermafbeelding met Ctrl+V,
-              of kies ze met Toevoegen.</div>` : ""}
+          ${mayEdit ? `<button type="button" class="files-hint" id="files-pick">${ICON.upload}
+              <span>${files.length ? "Sleep er meer hierheen" : "<b>Sleep foto's of bestanden hierheen</b>"},
+              plak een schermafbeelding met Ctrl+V, of klik om ze te kiezen.</span></button>` : ""}
           <div class="files-busy hidden" id="files-busy"></div>
         </div>`;
       slot.querySelectorAll("[data-view]").forEach((b) => { b.onclick = () => openViewer(b.dataset.view); });
@@ -821,6 +828,7 @@ window.DocItems = function (ctx) {
       if (!mayEdit) return;
       const input = slot.querySelector("#files-input");
       slot.querySelector("#files-add").onclick = () => input.click();
+      slot.querySelector("#files-pick").onclick = () => input.click();
       input.onchange = () => { upload([...input.files]); input.value = ""; };
       const zone = slot.querySelector("#files-drop");
       zone.addEventListener("dragover", (ev) => {
@@ -1549,9 +1557,9 @@ window.DocItems = function (ctx) {
         .filter((r) => r.kind === "password" && !seen.has(r.id) && seen.add(r.id));
       slot.innerHTML = `<div class="panel">
           <div class="panel-head"><h2>Wachtwoorden</h2>
-            <span class="sub">${rows.length ? (rows.length === 1 ? "1 wachtwoord" : `${rows.length} wachtwoorden`)
-              : "Nog geen wachtwoord bij dit apparaat"}</span>
-            ${mayEdit ? `<button class="btn ghost sm" id="pw-add" style="margin-left:auto">${ICON.plus} Wachtwoord toevoegen</button>` : ""}</div>
+            <span class="sub">${rows.length ? rows.length : "Nog geen"}</span>
+            ${mayEdit ? `<button class="btn ghost sm" id="pw-add" style="margin-left:auto"
+              title="Een wachtwoord voor dit apparaat vastleggen">${ICON.plus} Toevoegen</button>` : ""}</div>
           ${rows.map((r) => `<div class="rel-row" data-goto="${esc(r.id)}">
               <span class="rel-ic">${ICON.key}</span><span class="rel-name">${esc(r.name)}</span>
               ${r.archived ? '<span class="tag">gearchiveerd</span>' : ""}</div>`).join("")}
@@ -1605,8 +1613,8 @@ window.DocItems = function (ctx) {
       const options = all.filter((i) => i.id !== item.id && !i.archived
         && !item.relations.some((r) => r.id === i.id));
       slot.innerHTML = `<div class="panel">
-          <div class="panel-head"><h2>Gerelateerd</h2>
-            <span class="sub">Wat hier mee samenhangt</span></div>
+          <div class="panel-head"><h2>Gekoppeld</h2>
+            <span class="sub">${item.relations.length || "Wat hier mee samenhangt"}</span></div>
           ${rows}
           ${options.length && mayEdit ? `<div class="rel-add">
             <select class="inp" id="rel-pick"><option value="">Koppel aan…</option>
@@ -1663,16 +1671,24 @@ window.DocItems = function (ctx) {
         + shown.map((s) => `<span>${esc(s)}</span>`).join("");
     }
 
+    /* The latest changes, beside the page; the rest one click away. A machine
+       the RMM has kept up for a year has a long history, and the top of it is
+       what you came for. */
+    const RECENT = 8;
+    let wholeHistory = false;
+
     async function drawHistory() {
       const slot = host.querySelector("#history");
+      if (!slot) return;
       const revisions = await api(`/api/items/${item.id}/revisions`).catch(() => []);
       const word = { created: "aangemaakt", updated: "gewijzigd",
                      archived: "gearchiveerd", restored: "uit het archief gehaald",
                      "rmm-gone": "verdween uit de RMM", "rmm-back": "staat weer in de RMM" };
+      const shown = wholeHistory ? revisions : revisions.slice(0, RECENT);
       slot.innerHTML = `<div class="panel">
           <div class="panel-head"><h2>Geschiedenis</h2>
-            <span class="sub">Wie wat veranderde, en waarin</span></div>
-          ${revisions.map((r) => `<div class="rev-row">
+            <span class="sub">${revisions.length === 1 ? "1 wijziging" : `${revisions.length} wijzigingen`}</span></div>
+          ${shown.map((r) => `<div class="rev-row">
             <div class="rev-top">
               <b>${esc(r.user_email || "de RMM")}</b>
               <span class="muted">${esc(word[r.action] || r.action)}</span>
@@ -1691,7 +1707,11 @@ window.DocItems = function (ctx) {
               <span class="rc-to">${c.to ? esc(short(c.to)) : "leeg"}</span>
             </div>`).join("")}
           </div>`).join("")}
+          ${revisions.length > RECENT ? `<button type="button" class="rev-more" id="rev-more">${wholeHistory
+            ? "Alleen de laatste tonen" : `Alle ${revisions.length} wijzigingen tonen`}</button>` : ""}
         </div>`;
+      const more = slot.querySelector("#rev-more");
+      if (more) more.onclick = () => { wholeHistory = !wholeHistory; drawHistory(); };
       slot.querySelectorAll("[data-revert]").forEach((b) => {
         b.onclick = async () => {
           b.disabled = true;
