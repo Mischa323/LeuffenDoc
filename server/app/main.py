@@ -26,7 +26,7 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, Redirec
                                Response)
 from fastapi.staticfiles import StaticFiles
 
-from . import (attachments, auth, backup, database, docpush, export, m365, m365graph, pairing, rack,
+from . import (attachments, auth, backup, database, docpush, export, m365, m365tenants, pairing, rack,
                rmm, schema, settings, setup, strength, vault)
 
 log = logging.getLogger("leuffendoc")
@@ -98,18 +98,6 @@ async def _backup_loop() -> None:
         await asyncio.sleep(600)
 
 
-async def _m365_loop() -> None:
-    """Read every linked Microsoft 365 tenant again when its last reading is
-    older than m365graph.SYNC_HOURS; checked every ten minutes."""
-    while True:
-        for item_id in m365graph.due():
-            try:
-                await asyncio.to_thread(m365graph.sync, item_id)
-            except Exception as exc:              # the status is on the item; the loop goes on
-                log.info("reading Microsoft 365 for %s failed: %r", item_id, exc)
-        await asyncio.sleep(600)
-
-
 async def _note_changes(request: Request, call_next):
     """Any change that went through asks for the RMM's Docs tab to be brought
     up to date. Which change affects which machine is not worked out here: a
@@ -125,6 +113,7 @@ async def _note_changes(request: Request, call_next):
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     database.init_db()
+    m365tenants.retire_own_links()
     setup.settle_existing()
     setup.announce()
     # While this container's own image can still be looked up, note what it
@@ -133,11 +122,9 @@ async def lifespan(_app: FastAPI):
     asyncio.create_task(asyncio.to_thread(docker_update.remember_own_image))
     task = asyncio.create_task(_sync_loop())
     backups = asyncio.create_task(_backup_loop())
-    tenants = asyncio.create_task(_m365_loop())
     yield
     task.cancel()
     backups.cancel()
-    tenants.cancel()
 
 
 app = FastAPI(title="LeuffenDoc", version=VERSION, lifespan=lifespan)
@@ -819,57 +806,6 @@ def remove_attachment(attachment_id: str, request: Request,
 # --------------------------------------------------------------------------- #
 def _org_items(org_id: str) -> dict:
     return {i["id"]: i for i in database.list_items(org_id, include_archived=True)}
-
-
-# --------------------------------------------------------------------------- #
-# Microsoft 365: a tenant item read from Graph (see m365graph.py)
-# --------------------------------------------------------------------------- #
-def _tenant_item(user: dict, item_id: str, need: str) -> dict:
-    item, _ = _item_for(user, item_id, need)
-    if item["kind"] != "m365":
-        raise HTTPException(status_code=400, detail="Dit is geen Microsoft 365-tenant")
-    return item
-
-
-@app.get("/api/items/{item_id}/m365")
-def m365_status(item_id: str, user: dict = Depends(auth.current_user)):
-    _tenant_item(user, item_id, "read")
-    return m365graph.status(item_id)
-
-
-@app.put("/api/items/{item_id}/m365")
-async def m365_connect(item_id: str, request: Request, user: dict = Depends(auth.current_user)):
-    """Link a tenant: check the app registration can read it, store it (the
-    secret sealed with the vault's key) and read it for the first time."""
-    item = _tenant_item(user, item_id, "edit")
-    body = await request.json()
-    try:
-        result = await asyncio.to_thread(
-            m365graph.connect, item, str(body.get("tenant_id") or ""), str(body.get("client_id") or ""),
-            str(body.get("client_secret") or ""), user["email"])
-    except m365graph.GraphError as exc:
-        raise HTTPException(status_code=400, detail=f"Microsoft 365: {exc}")
-    database.audit("m365.link", user_email=user["email"], org_id=item["org_id"], target=item["name"],
-                   detail=f"tenant {body.get('tenant_id')}", ip=auth.client_ip(request))
-    return result
-
-
-@app.post("/api/items/{item_id}/m365/sync")
-async def m365_sync_now(item_id: str, user: dict = Depends(auth.current_user)):
-    _tenant_item(user, item_id, "edit")
-    try:
-        return await asyncio.to_thread(m365graph.sync, item_id)
-    except m365graph.GraphError as exc:
-        raise HTTPException(status_code=400, detail=f"Microsoft 365: {exc}")
-
-
-@app.delete("/api/items/{item_id}/m365")
-def m365_disconnect(item_id: str, request: Request, user: dict = Depends(auth.current_user)):
-    item = _tenant_item(user, item_id, "edit")
-    m365graph.disconnect(item_id)
-    database.audit("m365.unlink", user_email=user["email"], org_id=item["org_id"], target=item["name"],
-                   ip=auth.client_ip(request))
-    return m365graph.status(item_id)
 
 
 @app.get("/api/items/{item_id}/rack")

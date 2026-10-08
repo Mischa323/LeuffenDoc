@@ -790,103 +790,49 @@ window.DocItems = function (ctx) {
         </div>`;
     };
 
-    /* Microsoft 365: link the tenant, or see how its last reading went. The
-       secret goes to the server once and is never shown again -- only its
-       last four characters, to tell two apart. */
-    async function drawM365() {
+    /* Microsoft 365: the RMM links the tenant and reads it; here is how its
+       last reading went, and the way to where it is managed. */
+    function drawM365() {
       const slot = host.querySelector("#m365");
       if (!slot) return;
-      let st;
-      try { st = await api(`/api/items/${item.id}/m365`); } catch (e) { slot.innerHTML = ""; return; }
-      const perms = `<details class="m365-how"><summary>Wat de app-registratie nodig heeft</summary>
-          <ol>
-            <li>In het Entra-beheercentrum van de klant: <b>App-registraties → Nieuwe registratie</b>, alleen deze tenant.</li>
-            <li><b>API-machtigingen → Microsoft Graph → Toepassingsmachtigingen</b>:
-              <ul>${st.permissions.map((p) => `<li><code>${esc(p.name)}</code> — ${esc(p.for)}</li>`).join("")}</ul></li>
-            <li><b>Beheerderstoestemming verlenen</b> voor de tenant.</li>
-            <li><b>Certificaten en geheimen → Nieuw clientgeheim</b>; zet de vervaldatum in je agenda — de bel waarschuwt ook.</li>
-          </ol>
-          <div class="hint">Alleen lezen: LeuffenDoc schrijft nooit iets in de tenant.</div></details>`;
-      if (!st.linked) {
+      const rmmUrl = ctx.rmmUrl ? ctx.rmmUrl() : null;
+      const manage = rmmUrl && org.rmm_org_id
+        ? `<a class="btn ghost sm" href="${esc(rmmUrl)}/#/o/${encodeURIComponent(org.rmm_org_id)}/m365" target="_blank" rel="noopener">${ICON.external} Beheren in de RMM</a>` : "";
+      const r = item.rmm || {};
+      if (item.source !== "m365") {
         slot.innerHTML = `<div class="panel m365-panel">
-            <div class="panel-head"><h2>Koppeling met Microsoft 365</h2>
-              <span class="sub">Ophalen in plaats van overtypen</span></div>
-            ${mayEdit ? `<div class="m365-form">
-              <div class="frow"><label for="m365-tenant">Tenant-ID</label>
-                <input class="inp mono" id="m365-tenant" value="${esc(item.fields.tenant_id || "")}" placeholder="00000000-0000-0000-0000-000000000000 of klant.onmicrosoft.com" /></div>
-              <div class="frow"><label for="m365-client">Client-ID van de app-registratie</label>
-                <input class="inp mono" id="m365-client" placeholder="00000000-0000-0000-0000-000000000000" /></div>
-              <div class="frow"><label for="m365-secret">Client secret</label>
-                <input class="inp mono" id="m365-secret" type="password" autocomplete="off" /></div>
-              <button class="btn" id="m365-link">${ICON.link} Koppelen en ophalen</button>
-              <span class="m365-busy hidden" id="m365-busy">Bezig met ophalen…</span>
-            </div>${perms}` : `<div class="empty">Niet gekoppeld.</div>`}
+            <div class="panel-head"><h2>Koppeling met Microsoft 365</h2><span class="spacer"></span>${manage}</div>
+            <div class="m365-intro">${rmmUrl
+              ? `Koppel deze tenant in de RMM, bij de klant onder <b>Microsoft 365</b>. Dan komen de domeinen, abonnementen,
+                 gebruikers met hun licenties, gedeelde mailboxen, groepen en app-registraties hier vanzelf in — en waarschuwt
+                 de RMM voor een app-secret dat verloopt. Een tenant-ID die hier staat, laat de RMM deze pagina overnemen.`
+              : `Zonder koppeling met de RMM vul je alles hier zelf in.`}</div>
           </div>`;
-        const btn = slot.querySelector("#m365-link");
-        if (btn) btn.onclick = async () => {
-          btn.disabled = true;
-          slot.querySelector("#m365-busy").classList.remove("hidden");
-          try {
-            await api(`/api/items/${item.id}/m365`, {
-              method: "PUT", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ tenant_id: slot.querySelector("#m365-tenant").value,
-                                     client_id: slot.querySelector("#m365-client").value,
-                                     client_secret: slot.querySelector("#m365-secret").value }),
-            });
-            toast("Gekoppeld en opgehaald");
-            item = await api(`/api/items/${item.id}`);
-            forget(org.id);
-            draw();
-          } catch (e) {
-            toast(e.message);
-            btn.disabled = false;
-            slot.querySelector("#m365-busy").classList.add("hidden");
-          }
-        };
         return;
       }
-      const problems = st.problems || [];
+      const problems = r.problems || [];
       slot.innerHTML = `<div class="panel m365-panel">
           <div class="panel-head"><h2>Microsoft 365</h2>
-            <span class="sub">${st.last_ok ? `bijgewerkt ${when(st.last_sync)}` : `<span class="tag warn">ophalen mislukt</span>`}
-              · tenant <span class="mono">${esc(st.tenant_id)}</span> · secret …${esc(st.secret_hint || "")}</span>
-            <span class="spacer"></span>
-            ${mayEdit ? `<button class="btn ghost sm" id="m365-sync">${ICON.refresh} Nu bijwerken</button>
-              <button class="btn ghost sm" id="m365-unlink">${ICON.trash} Ontkoppelen</button>` : ""}</div>
-          ${st.last_error ? `<div class="callout warn m365-note"><div class="ic">${ICON.alert}</div>
-              <div class="cd">${esc(st.last_error)}</div></div>` : ""}
+            <span class="sub">${r.ok ? `gelezen door de RMM ${when(r.read_at)}` : `<span class="tag warn">lezen mislukt</span>`}
+              · tenant <span class="mono">${esc(item.rmm.tenant_id || "")}</span></span>
+            <span class="spacer"></span>${manage}</div>
+          ${!r.ok && r.error ? `<div class="callout warn m365-note"><div class="ic">${ICON.alert}</div>
+              <div class="cd">${esc(r.error)}. Hieronder staat de laatste lezing die wel lukte.</div></div>` : ""}
           ${problems.length ? `<div class="callout info m365-note"><div class="ic">${ICON.info}</div><div class="cd">
-              <b>Niet alles kon gelezen worden.</b><ul>${problems.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>
-              ${perms}</div></div>` : ""}
+              <b>Niet alles kon gelezen worden.</b><ul>${problems.map((p) => `<li>${esc(p.part)}: ${p.error === "forbidden"
+                ? `geen toestemming — geef de app-registratie <code>${esc(p.permission)}</code>` : esc(p.error)}</li>`).join("")}</ul>
+              Dat regel je in de app-registratie van de klant; de RMM leest daarna weer.</div></div>` : ""}
         </div>`;
-      const sync = slot.querySelector("#m365-sync");
-      if (sync) sync.onclick = async () => {
-        sync.disabled = true;
-        try {
-          await api(`/api/items/${item.id}/m365/sync`, { method: "POST" });
-          toast("Bijgewerkt");
-          item = await api(`/api/items/${item.id}`);
-          draw();
-        } catch (e) { toast(e.message); sync.disabled = false; drawM365(); }
-      };
-      const unlink = slot.querySelector("#m365-unlink");
-      if (unlink) unlink.onclick = async () => {
-        if (!window.confirm("De koppeling met Microsoft 365 verwijderen? Wat is opgehaald blijft staan, en wordt vanaf nu met de hand bijgehouden.")) return;
-        try {
-          await api(`/api/items/${item.id}/m365`, { method: "DELETE" });
-          toast("Ontkoppeld");
-          item = await api(`/api/items/${item.id}`);
-          draw();
-        } catch (e) { toast(e.message); }
-      };
     }
 
     const draw = async () => {
       const goneNote = item.rmm_gone ? `<div class="callout warn" style="margin-bottom:14px">
           <div class="ic">${ICON.alert}</div><div style="flex:1">
-          <div class="ct">Dit apparaat staat niet meer in de RMM</div>
+          <div class="ct">${item.kind === "m365" ? "De RMM leest deze tenant niet meer" : "Dit apparaat staat niet meer in de RMM"}</div>
           <div class="cd">Sinds ${when(item.rmm_seen_at)}. De pagina blijft staan — wat je erover
-            hebt vastgelegd is meestal juist dan nog nodig. Is de machine weg, archiveer hem dan.
+            hebt vastgelegd is meestal juist dan nog nodig. ${item.kind === "m365"
+              ? "Koppel hem opnieuw in de RMM, of archiveer hem als de klant ermee gestopt is."
+              : "Is de machine weg, archiveer hem dan."}
             ${item.archived ? "" : `<button class="btn ghost sm" id="gone-archive" style="margin-left:10px">${ICON.box} Archiveren</button>`}</div>
           </div></div>` : "";
       // Said where you arrive, so an archived page is not mistaken for one in use.

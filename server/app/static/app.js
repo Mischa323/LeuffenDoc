@@ -82,7 +82,7 @@
     { id: "microsoft365", group: "cloud", label: "Microsoft 365", icon: "cloud", title: "Microsoft 365",
       sub: "De tenant: domeinen, abonnementen, gebruikers, mailboxen en groepen", kinds: ["m365"],
       example: "Tenant van de klant",
-      empty: "De Microsoft 365-tenant van deze klant. Koppel hem met een app-registratie en de domeinen, abonnementen, gebruikers met hun licenties, gedeelde mailboxen, groepen en verlopende app-secrets komen er vanzelf in." },
+      empty: "De Microsoft 365-tenant van deze klant. Koppel hem in de RMM (klant → Microsoft 365) en de domeinen, abonnementen, gebruikers met hun licenties, gedeelde mailboxen, groepen en verlopende app-secrets komen hier vanzelf in." },
     { id: "applicaties", group: "cloud", label: "Applicaties", icon: "package", title: "Applicaties",
       sub: "De software waar de klant op draait", kinds: ["application"],
       example: "Exact Online of AFAS",
@@ -138,7 +138,9 @@
 
   const Items = window.DocItems({ api, esc, go, toast,
     // Which section of a customer lists a kind -- where a copy is made.
-    sectionOf: (kind) => ORG.find((t) => (t.kinds || []).includes(kind)) });
+    sectionOf: (kind) => ORG.find((t) => (t.kinds || []).includes(kind)),
+    // Where a browser reaches the RMM, for "Beheren in de RMM".
+    rmmUrl: () => (state.me && state.me.rmm_url) || null });
 
   /* Types defined here become sections inside a customer, after the built-in
      ones. They are rebuilt rather than reloaded, so making a type and using it

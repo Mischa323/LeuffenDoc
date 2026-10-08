@@ -398,13 +398,13 @@ CONTACT = {
 # --------------------------------------------------------------------------- #
 # Microsoft 365
 #
-# One tenant per customer, as a rule. What Microsoft 365 itself knows -- the
-# domains, subscriptions, users and their licences, mailboxes, groups, sites,
-# app registrations and security settings -- is fetched from Graph once the
-# tenant is linked (see m365graph.py), shown from there and kept in step; the
-# fields that carry ``rmm`` are those. What only people know is typed: who the
-# partner is, how it is backed up, who may reach which shared mailbox.
-# Unlinked, every field is simply typed.
+# One tenant per customer, as a rule. The RMM links it and reads it from
+# Microsoft Graph; what it reads -- the domains, subscriptions, users and their
+# licences, mailboxes, groups, sites, app registrations and security settings
+# -- arrives here on every sync (see m365tenants.py), shown from there and
+# kept in step: the fields that carry ``rmm`` are those. What only people know
+# is typed: who the partner is, how it is backed up, who may reach which shared
+# mailbox. Without the RMM, every field is simply typed.
 # --------------------------------------------------------------------------- #
 def _cols(*spec) -> list:
     """The columns of a table field: (key, label) or (key, label, {extras})."""

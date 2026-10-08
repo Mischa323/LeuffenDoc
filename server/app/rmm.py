@@ -22,7 +22,7 @@ import urllib.parse
 
 import httpx
 
-from . import database, schema, settings
+from . import database, m365tenants, schema, settings
 
 log = logging.getLogger("leuffendoc.rmm")
 
@@ -191,6 +191,7 @@ def sync() -> dict:
                      users=len(users), orgs=len(orgs), devices=devices["devices"],
                      network=devices["network"])
     unifi = "" if devices["network"] is None else f", {devices['network']} uit UniFi"
+    unifi += "" if not devices.get("m365") else f", {devices['m365']} Microsoft 365-tenants"
     database.audit("rmm.sync", detail=f"{len(users)} gebruikers, {len(orgs)} klanten, "
                                       f"{devices['devices']} apparaten{unifi} "
                                       f"({devices['new']} nieuw, {devices['gone']} verdwenen)")
@@ -446,6 +447,17 @@ def sync_network(by_rmm_org: dict) -> dict | None:
     return {"seen": seen, "devices": len(seen), "new": made}
 
 
+def fetch_m365_tenants() -> list | None:
+    """The Microsoft 365 tenants the RMM reads; None from an RMM that does not
+    read any yet."""
+    with _client() as client:
+        r = client.get(f"{base_url()}/api/v1/m365-tenants")
+    if r.status_code == 404:
+        return None
+    r.raise_for_status()
+    return r.json().get("tenants", [])
+
+
 def sync_devices() -> dict:
     """Mirror every device the API key can see into the right customer."""
     devices = fetch_devices()
@@ -534,6 +546,15 @@ def sync_devices() -> dict:
         log.warning("syncing network equipment from the RMM failed: %r", exc)
         network = None
 
+    # Microsoft 365 tenants, the same way: their own round, and an RMM too old
+    # to read them changes nothing here.
+    try:
+        tenants = fetch_m365_tenants()
+        m365 = None if tenants is None else m365tenants.sync(tenants, by_rmm_org)
+    except Exception as exc:
+        log.warning("syncing Microsoft 365 tenants from the RMM failed: %r", exc)
+        m365 = None
+
     # A device that is no longer in the RMM keeps its page and says so. It is
     # never removed here: what was documented about it is usually exactly what
     # somebody needs afterwards. The same for a VM its host no longer reports.
@@ -551,4 +572,5 @@ def sync_devices() -> dict:
             gone += 1
     return {"devices": device_count, "new": made + vms_made + (network or {}).get("new", 0),
             "updated": updated, "gone": gone, "vms": vms,
-            "network": None if network is None else network["devices"]}
+            "network": None if network is None else network["devices"],
+            "m365": None if m365 is None else m365["tenants"]}

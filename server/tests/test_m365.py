@@ -1,136 +1,116 @@
-"""A customer's Microsoft 365, read from Graph -- against a Graph of our own."""
+"""A customer's Microsoft 365 tenant, as the RMM reads it, documented here."""
 import datetime
+import json
+import time
 
-import httpx
+from app import database, m365tenants, rmm
 
-from app import database, m365graph
-
-GOOD = "goed~Geheim.Secret-0123456789"
 SOON = (datetime.date.today() + datetime.timedelta(days=20)).isoformat()
 
 
-def fake_graph(state: dict):
-    """A tenant: what Graph would answer, and what it refuses."""
-    def handler(request: httpx.Request) -> httpx.Response:
-        path = request.url.path.replace("/v1.0", "")
-        if path in state.get("refuse", ()):
-            return httpx.Response(403, json={"error": {"message": "Insufficient privileges"}})
-        if path == "/organization":
-            return httpx.Response(200, json={"value": [{"id": "tid-1", "displayName": "Proef BV", "verifiedDomains": [
-                {"name": "proef.nl", "isDefault": True}, {"name": "proefbv.onmicrosoft.com", "isInitial": True}]}]})
-        if path == "/directory/subscriptions":
-            return httpx.Response(200, json={"value": [{"skuId": "sku-bp", "nextLifecycleDateTime": SOON + "T00:00:00Z"}]})
-        if path == "/subscribedSkus":
-            return httpx.Response(200, json={"value": [
-                {"skuId": "sku-bp", "skuPartNumber": "SPB", "prepaidUnits": {"enabled": state["seats"]},
-                 "consumedUnits": len(state["users"]), "capabilityStatus": "Enabled"},
-                {"skuId": "sku-free", "skuPartNumber": "FLOW_FREE", "prepaidUnits": {"enabled": 0}, "consumedUnits": 0}]})
-        if path == "/users":
-            return httpx.Response(200, json={"value": [
-                *({"id": f"u-{n}", "displayName": n, "userPrincipalName": f"{n.lower()}@proef.nl", "mail": f"{n.lower()}@proef.nl",
-                   "accountEnabled": True, "assignedLicenses": [{"skuId": "sku-bp"}], "jobTitle": "Boekhouder"}
-                  for n in state["users"]),
-                {"id": "u-info", "displayName": "Info", "userPrincipalName": "info@proef.nl", "mail": "info@proef.nl",
-                 "accountEnabled": False, "assignedLicenses": []}]})
-        if path == "/users/u-info/mailboxSettings":
-            return httpx.Response(200, json={"userPurpose": "shared"})
-        if path == "/groups":
-            return httpx.Response(200, json={"value": [
-                {"id": "g-1", "displayName": "Iedereen", "mail": "iedereen@proef.nl", "mailEnabled": True,
-                 "securityEnabled": False, "groupTypes": []},
-                {"id": "g-2", "displayName": "Projecten", "mail": "projecten@proef.nl", "mailEnabled": True,
-                 "securityEnabled": False, "groupTypes": ["Unified"], "resourceProvisioningOptions": ["Team"]}]})
-        if path.startswith("/groups/") and path.endswith("/members"):
-            return httpx.Response(200, json={"value": [{"displayName": n} for n in state["users"]]})
-        if path == "/sites":
-            return httpx.Response(200, json={"value": [
-                {"displayName": "Projecten", "webUrl": "https://proef.sharepoint.com/sites/projecten"},
-                {"displayName": "Anna", "webUrl": "https://proef-my.sharepoint.com/personal/anna"}]})
-        if path == "/applications":
-            return httpx.Response(200, json={"value": [{"displayName": "LeuffenDoc", "appId": "app-1",
-                                                        "passwordCredentials": [{"displayName": "doc", "endDateTime": SOON + "T10:00:00Z"}]}]})
-        if path == "/policies/identitySecurityDefaultsEnforcementPolicy":
-            return httpx.Response(200, json={"isEnabled": False})
-        if path == "/identity/conditionalAccess/policies":
-            return httpx.Response(200, json={"value": [{"displayName": "MFA voor iedereen", "state": "enabled"}]})
-        return httpx.Response(404, json={"error": {"message": "unknown"}})
-    return handler
+def reading(users, seats=10, **extra):
+    """What /api/v1/m365-tenants says about one tenant."""
+    snapshot = {
+        "tenant": {"id": "tid-1", "name": "Proef BV", "default_domain": "proef.nl",
+                   "domains": [{"name": "proef.nl", "default": True, "initial": False},
+                               {"name": "proefbv.onmicrosoft.com", "default": False, "initial": True}]},
+        "subscriptions": [{"sku": "SPB", "product": "Microsoft 365 Business Premium", "seats": seats,
+                           "used": len(users), "renews": SOON, "status": "Enabled"}],
+        "users": [{"name": n, "upn": f"{n.lower()}@proef.nl", "licenses": ["Microsoft 365 Business Premium"],
+                   "job": "Boekhouder", "enabled": True, "guest": False} for n in users],
+        "mailboxes": [{"address": "info@proef.nl", "name": "Info", "kind": "shared"}],
+        "groups": [{"name": "Projecten", "mail": "projecten@proef.nl", "kind": "team", "dynamic": False, "members": users}],
+        "sites": [{"name": "Projecten", "url": "https://proef.sharepoint.com/sites/projecten"}],
+        "apps": [{"app": "Backup", "app_id": "a1", "kind": "secret", "name": "backup", "key_id": "k1", "expires": SOON}],
+        "security_defaults": False, "ca": [{"name": "MFA voor iedereen", "state": "enabled"}],
+        "problems": [{"part": "sites", "permission": "Sites.Read.All", "error": "forbidden"}],
+        "fetched_at": "2026-10-08T10:00:00+00:00", **extra}
+    return {"id": "m365:tid-1", "tenant_id": "TID-1", "name": "Proef BV", "enabled": True,
+            "last_poll": time.time(), "ok": True, "error": None, "snapshot": snapshot,
+            "org": {"id": "org-365", "name": "Proef BV"}}
 
 
-def use_fake(monkeypatch, state):
-    real = httpx.Client
-    monkeypatch.setattr(m365graph, "token", lambda tenant, client, secret: "tok" if secret == GOOD else
-                        (_ for _ in ()).throw(m365graph.GraphError("het client secret klopt niet (AADSTS7000215)")))
-    monkeypatch.setattr(m365graph.httpx, "Client",
-                        lambda **kw: real(transport=httpx.MockTransport(fake_graph(state)), **kw))
+def test_a_tenant_the_rmm_reads_is_documented(admin, monkeypatch):
+    org_id = database.upsert_org("Proef BV", rmm_org_id="org-365")
+    # Typed by hand before, with its tenant id: taken over, not doubled.
+    typed = admin.post(f"/api/orgs/{org_id}/items", json={"kind": "m365", "name": "Office van Proef", "fields": {
+        "tenant_id": "tid-1", "partner": "Leuffen IT (GDAP)", "primary_domain": "oud.nl"}}).json()
+    state = {"tenants": [reading(["Anna", "Bram"])]}
+    monkeypatch.setattr(rmm, "fetch_devices", lambda: [])
+    monkeypatch.setattr(rmm, "fetch_network_devices", lambda: [])
+    monkeypatch.setattr(rmm, "fetch_m365_tenants", lambda: state["tenants"])
+    assert rmm.sync_devices()["m365"] == 1
 
-
-def test_collect_reads_a_tenant(monkeypatch):
-    state = {"seats": 10, "users": ["Anna", "Bram"]}
-    use_fake(monkeypatch, state)
-    got = m365graph.collect("tid-1", "client", GOOD)
-    assert got["problems"] == []
+    items = [i for i in database.list_items(org_id) if i["kind"] == "m365"]
+    assert [i["id"] for i in items] == [typed["id"]]
+    item = admin.get(f"/api/items/{typed['id']}").json()
+    assert item["source"] == "m365" and item["rmm_device_id"] == "m365:tid-1"
+    got = item["rmm"]
     assert got["primary_domain"] == "proef.nl" and got["domains"][0] == {"label": "standaard", "value": "proef.nl"}
     assert got["subscriptions"] == [{"product": "Microsoft 365 Business Premium", "seats": "10", "used": "2",
                                      "renews": SOON, "status": "Actief"}]
-    assert [u["name"] for u in got["users"]] == ["Anna", "Bram"]
-    assert got["users"][0]["licenses"] == "Microsoft 365 Business Premium"
     assert got["shared"] == [{"mailbox": "info@proef.nl", "name": "Info", "kind": "Gedeeld"}]
-    assert {g["kind"] for g in got["groups"]} == {"Distributielijst", "Team"}
-    assert got["groups"][0]["members"] == "Anna, Bram"
-    assert got["sites"] == [{"name": "Projecten", "url": "https://proef.sharepoint.com/sites/projecten"}]
-    assert got["apps"][0]["expires"] == SOON and got["security_defaults"] == "Uit"
-    assert got["ca"] == [{"name": "MFA voor iedereen", "state": "Aan"}]
-
-    # A permission that was not granted costs its own part, and says which.
-    state["refuse"] = {"/applications", "/identity/conditionalAccess/policies"}
-    got = m365graph.collect("tid-1", "client", GOOD)
-    assert "apps" not in got and "users" in got
-    assert any("Application.Read.All" in p for p in got["problems"])
-
-
-def test_a_tenant_linked_to_its_item(admin, viewer, org, make, monkeypatch):
-    state = {"seats": 10, "users": ["Anna", "Bram"]}
-    use_fake(monkeypatch, state)
-    tenant = make(admin, "m365", "Proef BV", {"partner": "Leuffen IT (GDAP)", "domains": [{"label": "", "value": "getypt.nl"}]})
-    url = f"/api/items/{tenant['id']}/m365"
-    assert admin.get(url).json()["linked"] is False
-
-    wrong = admin.put(url, json={"tenant_id": "tid-1", "client_id": "client", "client_secret": "fout"})
-    assert wrong.status_code == 400 and "client secret klopt niet" in wrong.json()["detail"]
-    assert viewer.put(url, json={"tenant_id": "tid-1", "client_id": "client", "client_secret": GOOD}).status_code == 403
-
-    linked = admin.put(url, json={"tenant_id": "tid-1", "client_id": "client", "client_secret": GOOD})
-    assert linked.status_code == 200, linked.text
-    status = linked.json()
-    assert status["linked"] and status["last_ok"] and status["secret_hint"] == "6789"
-    assert "Geheim" not in str(database.m365_link(tenant["id"]))          # sealed, never stored as it is
-
-    item = admin.get(f"/api/items/{tenant['id']}").json()
-    assert item["source"] == "m365" and item["rmm"]["primary_domain"] == "proef.nl"
-    assert "domains" not in item["fields"] and item["fields"]["partner"] == "Leuffen IT (GDAP)"   # typed stays
-    # What is fetched is not typed over.
-    admin.patch(f"/api/items/{tenant['id']}", json={"fields": {"primary_domain": "anders.nl", "backup": "Acronis"}})
-    item = admin.get(f"/api/items/{tenant['id']}").json()
+    assert got["groups"][0]["kind"] == "Team" and got["groups"][0]["members"] == "Anna, Bram"
+    assert got["security_defaults"] == "Uit" and got["ca"] == [{"name": "MFA voor iedereen", "state": "Aan"}]
+    assert got["problems"] == [{"part": "SharePoint", "permission": "Sites.Read.All", "error": "forbidden"}]
+    # What only people know stays; what Microsoft 365 knows is not typed over.
+    assert item["fields"]["partner"] == "Leuffen IT (GDAP)" and "primary_domain" not in item["fields"]
+    admin.patch(f"/api/items/{typed['id']}", json={"fields": {"primary_domain": "anders.nl", "backup": "Acronis"}})
+    item = admin.get(f"/api/items/{typed['id']}").json()
     assert "primary_domain" not in item["fields"] and item["fields"]["backup"] == "Acronis"
+    told = {c["key"]: (c["from"], c["to"]) for r in reversed(admin.get(f"/api/items/{typed['id']}/revisions").json())
+            for c in r["changes"] if "from" in c}
+    assert told["primary_domain"] == ("oud.nl", "proef.nl")
 
-    # The next round says what changed, in words.
-    state["users"] = ["Anna", "Cas"]
-    state["seats"] = 12
-    assert admin.post(f"{url}/sync").status_code == 200
-    said = [c["said"] for r in admin.get(f"/api/items/{tenant['id']}/revisions").json()
-            for c in r["changes"] if c.get("said")]
+    # The next reading says what changed, in words.
+    state["tenants"] = [reading(["Anna", "Cas"], seats=12)]
+    rmm.sync_devices()
+    said = [c["said"] for r in admin.get(f"/api/items/{typed['id']}/revisions").json() for c in r["changes"] if c.get("said")]
     assert said and "Nieuwe gebruiker: Cas" in said[0] and "Weg: Bram" in said[0]
     assert "Microsoft 365 Business Premium: 10 → 12 licenties" in said[0]
+    rmm.sync_devices()                                   # nothing new: no new line
+    assert len([r for r in admin.get(f"/api/items/{typed['id']}/revisions").json()
+                for c in r["changes"] if c.get("said")]) == 1
 
     # The bell: an app secret and a subscription that run out soon.
     bell = admin.get("/api/expiring").json()["items"]
-    assert any(b["item_id"] == tenant["id"] and "LeuffenDoc" in b["field"] for b in bell), bell
-    assert any(b["item_id"] == tenant["id"] and "Business Premium" in b["field"] for b in bell)
+    assert any(b["item_id"] == typed["id"] and "Backup" in b["field"] for b in bell), bell
+    assert any(b["item_id"] == typed["id"] and "Business Premium" in b["field"] for b in bell)
 
-    # Unlinked, what was fetched stays on the page -- typed from then on.
-    assert admin.delete(url).status_code == 200
-    item = admin.get(f"/api/items/{tenant['id']}").json()
-    assert item["source"] == "manual" and item["fields"]["primary_domain"] == "proef.nl"
-    assert [u["name"] for u in item["fields"]["users"]] == ["Anna", "Cas"]
-    assert database.m365_link(tenant["id"]) is None
+    # An RMM too old to read tenants changes nothing; one that stopped says so.
+    monkeypatch.setattr(rmm, "fetch_m365_tenants", lambda: None)
+    rmm.sync_devices()
+    assert database.get_item(typed["id"])["rmm_gone"] is False
+    state["tenants"] = []
+    monkeypatch.setattr(rmm, "fetch_m365_tenants", lambda: state["tenants"])
+    rmm.sync_devices()
+    assert database.get_item(typed["id"])["rmm_gone"] is True
+
+
+def test_a_tenant_read_by_the_rmm_alone_gets_a_page(admin, monkeypatch):
+    org_id = database.upsert_org("Nieuw BV", rmm_org_id="org-new")
+    tenant = dict(reading(["Dirk"]), tenant_id="tid-new", id="m365:tid-new", name="Nieuw BV",
+                  org={"id": "org-new", "name": "Nieuw BV"})
+    monkeypatch.setattr(rmm, "fetch_devices", lambda: [])
+    monkeypatch.setattr(rmm, "fetch_network_devices", lambda: [])
+    monkeypatch.setattr(rmm, "fetch_m365_tenants", lambda: [tenant])
+    rmm.sync_devices()
+    made = [i for i in database.list_items(org_id) if i["kind"] == "m365"]
+    assert len(made) == 1 and made[0]["name"] == "Nieuw BV" and made[0]["rmm"]["users"][0]["name"] == "Dirk"
+
+
+def test_links_made_here_before_are_undone(admin, org, make):
+    """Before the RMM read tenants, LeuffenDoc linked them itself; such a link
+    is undone at start-up, keeping what was read."""
+    item = make(admin, "m365", "Oud gekoppeld", {})
+    with database.write() as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS m365_links (item_id TEXT PRIMARY KEY, tenant_id TEXT)")
+        conn.execute("INSERT INTO m365_links VALUES (?, ?)", (item["id"], "tid-old"))
+        conn.execute("UPDATE items SET source='m365', rmm_device_id='m365:tid-old', rmm_json=? WHERE id=?",
+                     (json.dumps({"tenant_id": "tid-old", "primary_domain": "oud.nl",
+                                  "holds": ["tenant_id", "primary_domain"]}), item["id"]))
+    assert m365tenants.retire_own_links() == 1
+    after = database.get_item(item["id"])
+    assert after["source"] == "manual" and after["fields"]["tenant_id"] == "tid-old"
+    assert after["fields"]["primary_domain"] == "oud.nl"
+    assert not database.rows("SELECT name FROM sqlite_master WHERE name='m365_links'")

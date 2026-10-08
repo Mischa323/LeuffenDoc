@@ -289,23 +289,6 @@ CREATE TABLE IF NOT EXISTS rack_layouts (
     FOREIGN KEY (rack_id) REFERENCES items(id) ON DELETE CASCADE
 );
 
--- How a Microsoft 365 tenant item is read from Graph: an app registration in
--- that tenant. The client secret is sealed with the vault's key.
-CREATE TABLE IF NOT EXISTS m365_links (
-    item_id       TEXT PRIMARY KEY,
-    tenant_id     TEXT NOT NULL,
-    client_id     TEXT NOT NULL,
-    secret_sealed TEXT NOT NULL,
-    secret_hint   TEXT,
-    linked_at     REAL NOT NULL,
-    linked_by     TEXT,
-    last_sync     REAL,
-    last_ok       INTEGER,
-    last_error    TEXT,
-    problems_json TEXT NOT NULL DEFAULT '[]',
-    FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
-);
-
 -- How a built-in kind is laid out here: its blocks, the order of its fields,
 -- fields renamed or hidden, and fields added to it (see schema.arrange). No row
 -- means the layout from the code.
@@ -622,6 +605,25 @@ def set_by_person(item_id: str, key: str) -> bool:
     return False
 
 
+def unlinked_tenant(org_id: str, tenant_id: str, name: str) -> dict | None:
+    """A Microsoft 365 tenant documented by hand that the RMM now reads: the
+    same customer, not kept in step yet, and the same tenant id -- or, when
+    none says one, the same name."""
+    for r in rows("SELECT * FROM items WHERE org_id=? AND kind='m365' AND rmm_device_id IS NULL "
+                  "ORDER BY created_at", (org_id,)):
+        item = _item_out(r)
+        if (item["fields"].get("tenant_id") or "").strip().lower() == tenant_id:
+            return item
+    r = row("SELECT * FROM items WHERE org_id=? AND kind='m365' AND rmm_device_id IS NULL AND archived=0 "
+            "AND LOWER(name)=LOWER(?) ORDER BY created_at LIMIT 1", (org_id, name.strip()))
+    return _item_out(r) if r else None
+
+
+def synced_items(prefix: str) -> list:
+    """Every item kept in step from elsewhere under ids that start so."""
+    return [_item_out(r) for r in rows("SELECT * FROM items WHERE rmm_device_id LIKE ?", (prefix + "%",))]
+
+
 def link_rmm(item_id: str, device_id: str, keys: list, source: str = "rmm") -> None:
     """From now on this item mirrors that device in the RMM (or that tenant in
     Microsoft 365). What was typed in the fields it now fills (``keys``) is
@@ -650,47 +652,6 @@ def unlink_rmm(item_id: str, keys: list) -> None:
                 fields[key] = reported[key]
         conn.execute("UPDATE items SET source='manual', rmm_device_id=NULL, rmm_json=NULL, rmm_gone=0, "
                      "fields_json=?, updated_at=? WHERE id=?", (json.dumps(fields), time.time(), item_id))
-
-
-# --------------------------------------------------------------------------- #
-# Microsoft 365 links
-# --------------------------------------------------------------------------- #
-def m365_link(item_id: str) -> dict | None:
-    r = row("SELECT * FROM m365_links WHERE item_id=?", (item_id,))
-    if not r:
-        return None
-    r["problems"] = json.loads(r.pop("problems_json") or "[]")
-    return r
-
-
-def m365_links() -> list:
-    return [m365_link(r["item_id"]) for r in rows("SELECT item_id FROM m365_links")]
-
-
-def save_m365_link(item_id: str, tenant_id: str, client_id: str, secret_sealed: str,
-                   secret_hint: str, by: str | None) -> None:
-    with write() as conn:
-        conn.execute(
-            "INSERT INTO m365_links (item_id, tenant_id, client_id, secret_sealed, secret_hint, linked_at, linked_by) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(item_id) DO UPDATE SET tenant_id=excluded.tenant_id, "
-            "client_id=excluded.client_id, secret_sealed=excluded.secret_sealed, "
-            "secret_hint=excluded.secret_hint, linked_at=excluded.linked_at, linked_by=excluded.linked_by",
-            (item_id, tenant_id, client_id, secret_sealed, secret_hint, time.time(), by))
-
-
-def m365_result(item_id: str, ok: bool, error: str | None = None, problems: list | None = None) -> None:
-    with write() as conn:
-        if problems is None:
-            conn.execute("UPDATE m365_links SET last_sync=?, last_ok=?, last_error=? WHERE item_id=?",
-                         (time.time(), int(ok), error, item_id))
-        else:
-            conn.execute("UPDATE m365_links SET last_sync=?, last_ok=?, last_error=?, problems_json=? "
-                         "WHERE item_id=?", (time.time(), int(ok), error, json.dumps(problems), item_id))
-
-
-def delete_m365_link(item_id: str) -> None:
-    with write() as conn:
-        conn.execute("DELETE FROM m365_links WHERE item_id=?", (item_id,))
 
 
 def count_items(org_id: str) -> dict:
