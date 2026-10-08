@@ -79,7 +79,7 @@ def form_of(item: dict) -> dict:
     if fields.get("rackmount") == LOOSE:
         return {"rack": False, "units": None, "guessed": False}
     if item["kind"] == "network":
-        rack = role in ("Switch", "Router", "Firewall")
+        rack = role in ("Switch", "Router", "Firewall", "NVR")
     elif item["kind"] == "computer":
         rack = role == "Server"
     else:
@@ -90,7 +90,8 @@ def form_of(item: dict) -> dict:
 def placeable(item: dict) -> bool:
     if item["kind"] == "rack" or item.get("archived"):
         return False
-    if item["kind"] == "computer" and (item.get("fields") or {}).get("role") == "Virtuele machine":
+    # Not what hangs on a wall or runs inside a server.
+    if (item.get("fields") or {}).get("role") in ("Virtuele machine", "Camera"):
         return False
     return item["kind"] in EQUIPMENT or item["kind"] in schema.custom()
 

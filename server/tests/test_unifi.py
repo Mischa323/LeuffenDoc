@@ -76,3 +76,28 @@ def test_unifi_equipment_is_documented(admin, monkeypatch):
     rmm.sync_devices()
     assert database.get_item(items["AP Kantine"]["id"])["rmm_gone"] is True
     assert database.get_item(items["UDM-Pro"]["id"])["rmm_gone"] is False
+
+
+def test_a_camera_an_older_rmm_called_a_switch_is_put_right(admin, monkeypatch):
+    org_id = database.upsert_org("Camera BV", rmm_org_id="org-camera")
+    camera = dict(_device("aa:bb:cc:00:01:01", "Camera voordeur", "G5 Flex", "switch"),
+                  org={"id": "org-camera", "name": "Camera BV"})
+    other = dict(_device("aa:bb:cc:00:01:02", "Camera achter", "G4 Bullet", "switch"),
+                 org={"id": "org-camera", "name": "Camera BV"})
+    monkeypatch.setattr(rmm, "fetch_devices", lambda: [])
+    monkeypatch.setattr(rmm, "fetch_network_devices", lambda: [camera, other])
+    rmm.sync_devices()
+    items = {i["name"]: i for i in database.list_items(org_id)}
+    assert items["Camera voordeur"]["fields"]["role"] == "Switch"
+
+    # Somebody says what the second one is; the RMM is fixed and says camera.
+    admin.patch(f"/api/items/{items['Camera achter']['id']}", json={"fields": {"role": "Wifi-punt"}})
+    camera["type"] = other["type"] = "camera"
+    rmm.sync_devices()
+    assert database.get_item(items["Camera voordeur"]["id"])["fields"]["role"] == "Camera"
+    assert database.get_item(items["Camera achter"]["id"])["fields"]["role"] == "Wifi-punt"   # theirs
+
+    # A camera does not go in a patch cabinet.
+    cabinet = admin.post(f"/api/orgs/{org_id}/items", json={"kind": "rack", "name": "Kast", "fields": {}}).json()
+    names = {c["name"] for c in admin.get(f"/api/items/{cabinet['id']}/rack").json()["candidates"]}
+    assert "Camera voordeur" not in names

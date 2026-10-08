@@ -595,6 +595,16 @@ def unlinked_twin(org_id: str, kind: str, name: str, mac: str) -> dict | None:
     return _item_out(r) if r else None
 
 
+def set_by_person(item_id: str, key: str) -> bool:
+    """Whether anybody -- rather than a sync -- ever set this field, when the
+    item was made or since."""
+    for r in rows("SELECT changes_json FROM revisions WHERE item_id=? AND user_email IS NOT NULL",
+                  (item_id,)):
+        if any(c.get("key") == key for c in json.loads(r["changes_json"] or "[]")):
+            return True
+    return False
+
+
 def link_rmm(item_id: str, device_id: str, keys: list) -> None:
     """From now on this item mirrors that device in the RMM. What was typed in
     the fields the RMM now fills (``keys``) is taken out of them rather than

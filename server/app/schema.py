@@ -117,7 +117,7 @@ NETWORK = {
     "groups": [
         {"key": "wat", "label": "Wat het is", "fields": [
             _f("role", "Soort", "select",
-               options=["Router", "Switch", "Firewall", "Wifi-punt", "Modem"]),
+               options=["Router", "Switch", "Firewall", "Wifi-punt", "Modem", "Camera", "NVR"]),
             _f("status", "Status", "select", options=STATUS),
             _f("ports", "Aantal poorten", "number", icon="network",
                hint="Alleen bij een switch. Hiermee wordt de poortenlijst opgebouwd."),
@@ -383,7 +383,8 @@ SUBTYPES = {
                  ("NAS", "NAS'en", "disk"), ("Tablet", "Tablets", "tablet")],
     "network": [("Router", "Routers", "router"), ("Switch", "Switches", "network"),
                 ("Firewall", "Firewalls", "shield"), ("Wifi-punt", "Wifi-punten", "wifi"),
-                ("Modem", "Modems", "globe")],
+                ("Modem", "Modems", "globe"), ("Camera", "Camera's", "camera"),
+                ("NVR", "Recorders (NVR)", "disk")],
     "printer": [("Printer", "Printers", "printer"), ("Multifunctional", "Multifunctionals", "printer"),
                 ("Labelprinter", "Labelprinters", "printer"), ("Plotter", "Plotters", "printer")],
 }

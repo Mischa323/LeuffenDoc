@@ -356,7 +356,8 @@ def _runs_on(item_id: str, host_item_id: str, always: bool, label) -> None:
 NET_PREFIX = "unifi:"
 # The fields UniFi fills; a firmware update or another address is history.
 NET_KEYS = ["manufacturer", "model", "firmware", "mgmt_ip"]
-_NET_ROLES = {"gateway": "Router", "switch": "Switch", "ap": "Wifi-punt"}
+_NET_ROLES = {"gateway": "Router", "switch": "Switch", "ap": "Wifi-punt",
+              "camera": "Camera", "nvr": "NVR"}
 
 
 def agent_device(device_id: str) -> bool:
@@ -384,7 +385,8 @@ def network_payload(device: dict) -> dict:
             "firmware": device.get("firmware") or "", "mgmt_ip": device.get("ip") or "",
             # Only these come from UniFi; the rest of the page is typed.
             "holds": NET_KEYS,
-            "source": "unifi", "mac": device.get("mac") or "", "state": device.get("state") or "",
+            "source": "unifi", "type": device.get("type") or "",
+            "mac": device.get("mac") or "", "state": device.get("state") or "",
             "online": device.get("state") == "online", "clients": device.get("clients"),
             "uptime": device.get("uptime"), "console": device.get("console") or "",
             "account": device.get("account") or "", "uplink_mac": device.get("uplink_mac") or "",
@@ -422,7 +424,15 @@ def sync_network(by_rmm_org: dict) -> dict | None:
                 database.link_rmm(twin["id"], key, NET_KEYS)
                 existing = twin
         if existing:
-            database.update_item(existing["id"], rmm=payload, rmm_keys=NET_KEYS,
+            # What kind of device it is was the sync's guess, and the sync may
+            # correct it (a camera an older RMM called a switch) -- until a
+            # person says what it is: from then on it is theirs.
+            role = _NET_ROLES.get(device.get("type"))
+            fields = None
+            if role and existing["fields"].get("role") != role \
+                    and not database.set_by_person(existing["id"], "role"):
+                fields = {"role": role}
+            database.update_item(existing["id"], fields=fields, rmm=payload, rmm_keys=NET_KEYS,
                                  by=None, source="rmm", label=label)
             database.sync_adapters(existing["id"], nics)
             continue
