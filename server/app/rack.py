@@ -177,10 +177,7 @@ def _device(item: dict, hidden: set) -> dict:
               "role": fields.get("role") or "", "status": fields.get("status") or "",
               "archived": bool(item.get("archived")), **form_of(item)}
     if item["kind"] == "network":
-        try:
-            count = int(fields.get("ports") or 0)
-        except (TypeError, ValueError):
-            count = 0
+        count = schema.port_count(item)
         if count:
             device["ports"] = [{
                 "number": p["number"], "label": p["label"], "vlan": p["vlan"],

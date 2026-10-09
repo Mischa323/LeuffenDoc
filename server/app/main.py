@@ -563,8 +563,42 @@ def _decorate(item: dict, user: dict) -> dict:
     if item["kind"] in schema.adapter_kinds():
         item["adapters"] = database.list_adapters(item["id"])
     if has_ports(item):
-        item["ports"] = database.ports_of(item["id"], port_count(item))
+        item["ports"] = _live_ports(item, database.ports_of(item["id"], port_count(item)))
     return item
+
+
+def _live_ports(item: dict, ports: list) -> list:
+    """What UniFi says of each port right now -- up or down, speed, PoE, its
+    VLANs and what it sees plugged in -- beside what is documented on it. It
+    changes all day, so it is shown, not written into the history."""
+    reported = (item.get("rmm") or {}) if item.get("source") == "rmm" else {}
+    live = {p.get("idx"): p for p in reported.get("ports") or [] if isinstance(p, dict)}
+    if not live:
+        return ports
+    known = database.adapters_by_mac(item["org_id"])
+    for port in ports:
+        p = live.get(port["number"])
+        if not p:
+            continue
+        device = None
+        # Below the port a UniFi device; on the uplink, what the switch hangs on.
+        below = p.get("device_mac") or (reported.get("uplink_mac") if p.get("uplink") else "")
+        below = "".join(ch for ch in str(below or "").lower() if ch in "0123456789abcdef")
+        if len(below) == 12:
+            found = database.item_by_rmm_device(rmm.NET_PREFIX + below)
+            if found and found["org_id"] == item["org_id"]:
+                device = {"id": found["id"], "name": found["name"]}
+        clients = []
+        for c in p.get("clients") or []:
+            mac = "".join(ch for ch in str(c.get("mac") or "").lower() if ch in "0123456789abcdef")
+            match = known.get(mac)
+            clients.append({"mac": c.get("mac") or "", "name": c.get("name") or "", "ip": c.get("ip") or "",
+                            "item_id": match["item_id"] if match else None,
+                            "item_name": match["item_name"] if match else None})
+        port["live"] = {k: p.get(k) for k in ("up", "speed", "poe_on", "poe_watts", "uplink", "disabled", "native",
+                                              "tagged", "name", "profile", "mode", "lag")}
+        port["live"].update(device=device, clients=clients, vlans=bool(reported.get("ports_vlans")))
+    return ports
 
 
 @app.get("/api/kinds")
@@ -1032,10 +1066,7 @@ RMM_ADAPTER_FIELDS = {"name", "mac", "ipv4", "ipv6"}
 
 
 def port_count(item: dict) -> int:
-    try:
-        return int(item["fields"].get("ports") or 0)
-    except (TypeError, ValueError):
-        return 0
+    return schema.port_count(item)
 
 
 def has_ports(item: dict) -> bool:

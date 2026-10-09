@@ -774,6 +774,7 @@ window.DocItems = function (ctx) {
       const u = item.rmm || {};
       if (item.source !== "rmm" || u.source !== "unifi") return "";
       if (item.kind === "subnet") return unifiNetworkHtml(u);
+      if (item.kind === "vpn") return unifiVpnHtml(u);
       const hex = (m) => String(m || "").toLowerCase().replace(/[^0-9a-f]/g, "");
       const up = u.uplink_mac ? all.find((i) => i.rmm_device_id === `unifi:${hex(u.uplink_mac)}`) : null;
       const state = { online: ["ok", "online"], offline: ["warn", "offline"], pending: ["", "wordt bijgewerkt"] }[u.state]
@@ -823,6 +824,26 @@ window.DocItems = function (ctx) {
           <div class="panel-head"><h2>UniFi</h2>
             <span class="sub">Zoals de RMM het leest${u.account ? ` · ${esc(u.account)}` : ""}</span></div>
           <div class="deflist">${rows.map(([k, v]) => `<div class="dt"><span>${k}</span></div><div class="dd">${v}</div>`).join("")}</div>
+        </div>`;
+    };
+
+    /* A VPN as the gateway has it: on or off, on which WAN, and whether its
+       settings could be read or only its name and kind. */
+    const unifiVpnHtml = (u) => {
+      const rows = [
+        item.rmm_gone ? null : ["Status", u.enabled === false ? '<span class="tag warn">uit</span>' : '<span class="tag ok">aan</span>'],
+        u.console ? ["Console", esc(u.console)] : null,
+        u.interface ? ["Via", esc(u.interface.toUpperCase())] : null,
+        u.local_ip ? ["Adres hier", `<span class="mono">${esc(u.local_ip)}</span>`] : null,
+        u.last_seen ? ["Gezien door de RMM", esc(when(u.last_seen))] : null,
+      ].filter(Boolean);
+      return `<div class="panel" id="unifi">
+          <div class="panel-head"><h2>UniFi</h2>
+            <span class="sub">Zoals de RMM het leest${u.account ? ` · ${esc(u.account)}` : ""}</span></div>
+          <div class="deflist">${rows.map(([k, v]) => `<div class="dt"><span>${k}</span></div><div class="dd">${v}</div>`).join("")}</div>
+          <div class="unifi-note">${u.detail
+            ? "De sleutel leest de RMM nooit: die zet je hier zelf, versleuteld."
+            : "Van deze VPN kon de RMM alleen de naam en de soort lezen — de rest vul je hier zelf in."}</div>
         </div>`;
     };
 
@@ -1647,6 +1668,40 @@ window.DocItems = function (ctx) {
 
     /* A switch's patch list. The whole point is the empty rows: you come here
        to find a free port as often as to look one up. */
+    /* What UniFi says of a port right now, beside what is documented on it:
+       up or down and how fast, PoE, its VLANs, and what it sees plugged in. */
+    const portSpeed = (m) => (!m ? "" : m >= 1000 ? `${String(m / 1000).replace(".", ",")} Gb/s` : `${m} Mb/s`);
+    const isGeneric = (name) => !name || /^port \d+$/i.test(name);
+    const liveVlans = (l) => {
+      if (!l || !l.vlans || l.disabled) return "";
+      const tagged = l.tagged === "all" ? "alle VLAN's" : (l.tagged || []).join(", ");
+      return [l.native, tagged ? `getagd: ${tagged}` : ""].filter(Boolean).join(" · ");
+    };
+    const portState = (l) => {
+      if (!l) return "";
+      if (l.disabled) return '<span class="tag">uitgeschakeld</span>';
+      return `<span class="pstate ${l.up ? "up" : "down"}" title="${l.up ? "actief" : "niet actief"}"></span>
+        ${l.up ? `<span>${esc(portSpeed(l.speed))}</span>` : '<span class="muted">niet actief</span>'}
+        ${l.poe_on ? `<span class="tag sm">PoE${l.poe_watts ? ` ${String(l.poe_watts).replace(".", ",")} W` : ""}</span>` : ""}
+        ${l.uplink ? '<span class="tag sm">uplink</span>' : ""}${l.lag ? '<span class="tag sm">LAG</span>' : ""}
+        ${l.mode ? `<span class="tag sm">${esc(l.mode)}</span>` : ""}`;
+    };
+    const liveOn = (l) => {
+      if (!l) return "";
+      if (l.device) return `<a data-goto="${esc(l.device.id)}">${esc(l.device.name)}</a> <span class="muted">gezien door UniFi</span>`;
+      const cs = l.clients || [];
+      if (cs.length === 1) {
+        const c = cs[0];
+        return `${c.item_id ? `<a data-goto="${esc(c.item_id)}">${esc(c.item_name)}</a>` : esc(c.name || c.mac)}
+          <span class="mono ad-mac">${esc(c.mac)}</span> <span class="muted">gezien door UniFi</span>`;
+      }
+      if (cs.length > 1) {
+        return `<span title="${esc(cs.map((c) => c.item_name || c.name || c.mac).join("\n"))}">${cs.length} apparaten</span>
+          <span class="muted">gezien door UniFi</span>`;
+      }
+      return l.up ? '<span class="muted">in gebruik</span>' : "";
+    };
+
     function drawPorts() {
       const slot = host.querySelector("#ports");
       if (!slot) return;
@@ -1658,21 +1713,26 @@ window.DocItems = function (ctx) {
             poorten deze switch heeft, dan verschijnt hier de patchlijst.</div></div>`;
         return;
       }
-      const free = ports.filter((p) => !p.adapter && !p.beyond).length;
+      const live = ports.some((p) => p.live);
+      const free = ports.filter((p) => !p.adapter && !p.beyond && !(p.live && p.live.up)).length;
+      const active = ports.filter((p) => p.live && p.live.up).length;
+      const vlansKnown = ports.some((p) => p.live && p.live.vlans);
       slot.innerHTML = `<div class="panel">
           <div class="panel-head"><h2>Poorten</h2>
-            <span class="sub">${free} van ${ports.filter((p) => !p.beyond).length} vrij</span></div>
-          <table class="grid ports"><thead><tr><th>Poort</th><th>Wat erop zit</th>
+            <span class="sub">${live ? `${active} actief · ` : ""}${free} van ${ports.filter((p) => !p.beyond).length} vrij</span>
+            ${live ? `<span class="tag sm" title="Status, snelheid${vlansKnown ? ", VLAN's" : ""} en wat erop zit: zoals UniFi het nu ziet">UniFi</span>` : ""}</div>
+          <table class="grid ports"><thead><tr><th>Poort</th>${live ? "<th>Status</th>" : ""}<th>Wat erop zit</th>
             <th>Label</th><th>VLAN</th></tr></thead><tbody>
-            ${ports.map((p) => `<tr class="${p.adapter ? "" : "free"}">
+            ${ports.map((p) => `<tr class="${p.adapter || (p.live && p.live.up) ? "" : "free"}">
               <td class="pnum">${p.number}${p.beyond ? ' <span class="tag warn">buiten bereik</span>' : ""}</td>
+              ${live ? `<td class="pst">${portState(p.live)}</td>` : ""}
               <td>${p.adapter
                 ? `<a data-goto="${esc(p.adapter.item_id)}">${esc(p.adapter.item_name)}</a>
                    <span class="muted">${esc(p.adapter.name || "")}</span>
                    <span class="mono ad-mac">${esc(p.adapter.mac || "")}</span>`
-                : '<span class="muted">vrij</span>'}</td>
-              <td>${esc(p.label || "")}</td>
-              <td>${p.vlan ? esc(p.vlan) : ""}</td>
+                : liveOn(p.live) || '<span class="muted">vrij</span>'}</td>
+              <td>${esc(p.label || (p.live && !isGeneric(p.live.name) ? p.live.name : ""))}</td>
+              <td>${liveVlans(p.live) ? esc(liveVlans(p.live)) : p.vlan ? esc(p.vlan) : ""}</td>
             </tr>`).join("")}
           </tbody></table></div>`;
       slot.querySelectorAll("[data-goto]").forEach((a) => {
@@ -1778,7 +1838,10 @@ window.DocItems = function (ctx) {
                 ? `${esc(p.adapter.item_name)} <span class="muted">${esc(p.adapter.name || "")}</span>`
                 : '<span class="muted">vrij</span>'}</td>
               <td><input class="inp" data-pf="label" value="${esc(p.label || "")}" /></td>
-              <td><input class="inp" data-pf="vlan" value="${esc(p.vlan || "")}" style="max-width:100px" /></td>
+              <td>${liveVlans(p.live)
+                ? `<input class="inp" data-pf="vlan" value="${esc(p.vlan || "")}" disabled
+                     placeholder="${esc(liveVlans(p.live))}" title="Uit UniFi: ${esc(liveVlans(p.live))}" style="max-width:220px" />`
+                : `<input class="inp" data-pf="vlan" value="${esc(p.vlan || "")}" style="max-width:100px" />`}</td>
               <td class="right">${p.adapter
                 ? `<button type="button" class="btn ghost sm" data-unpatch>Leegmaken</button>` : ""}</td>
             </tr>`).join("")}
@@ -1852,8 +1915,9 @@ window.DocItems = function (ctx) {
         return all.filter((r) => wanted.has(Number(r.dataset.port)));
       };
       const set = (row, key, value) => {
-        if (value === "") return;
-        row.querySelector(`[data-pf="${key}"]`).value = value === "-" ? "" : value;
+        const input = row.querySelector(`[data-pf="${key}"]`);
+        if (value === "" || input.disabled) return;          // a VLAN UniFi knows is UniFi's
+        input.value = value === "-" ? "" : value;
       };
       form.querySelector("#pb-apply").onclick = () => {
         let chosen;
@@ -1881,7 +1945,8 @@ window.DocItems = function (ctx) {
             const p = by[row.dataset.port];
             if (!p || (!p.label && !p.vlan)) return;
             row.querySelector('[data-pf="label"]').value = p.label || "";
-            row.querySelector('[data-pf="vlan"]').value = p.vlan || "";
+            const vlanInput = row.querySelector('[data-pf="vlan"]');
+            if (!vlanInput.disabled) vlanInput.value = p.vlan || "";
             flash(row);
             n++;
           });

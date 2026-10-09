@@ -1181,6 +1181,18 @@ def set_port(switch_id: str, number: int, label=None, vlan=None,
                  None if clear_adapter else adapter_id, now, by))
 
 
+def adapters_by_mac(org_id: str) -> dict:
+    """Every adapter a customer has documented, by its MAC as hex only -- to
+    name what a switch port sees."""
+    out = {}
+    for r in rows("SELECT a.id, a.name, a.mac, i.id AS item_id, i.name AS item_name, i.kind AS item_kind "
+                  "FROM adapters a JOIN items i ON i.id = a.item_id WHERE i.org_id=? AND i.archived=0", (org_id,)):
+        mac = "".join(c for c in str(r["mac"] or "").lower() if c in "0123456789abcdef")
+        if len(mac) == 12:
+            out.setdefault(mac, dict(r))
+    return out
+
+
 def port_of_adapter(adapter_id: str) -> dict | None:
     return row("SELECT p.number, p.switch_id, i.name AS switch_name FROM switch_ports p "
                "JOIN items i ON i.id = p.switch_id WHERE p.adapter_id=?", (adapter_id,))

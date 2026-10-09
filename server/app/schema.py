@@ -125,7 +125,7 @@ NETWORK = {
             _f("role", "Soort", "select",
                options=["Router", "Switch", "Firewall", "Wifi-punt", "Modem", "Camera", "NVR"]),
             _f("status", "Status", "select", options=STATUS),
-            _f("ports", "Aantal poorten", "number", icon="network",
+            _f("ports", "Aantal poorten", "number", icon="network", rmm="port_count",
                hint="Alleen bij een switch. Hiermee wordt de poortenlijst opgebouwd."),
             _f("location", "Locatie", "ref", ref="location"),
         ]},
@@ -294,22 +294,29 @@ VPN = {
     "sub": "Site-to-site-verbindingen en VPN voor thuiswerkers",
     "backref": "Wat hiernaar verwijst",
     "columns": ["vpn_type", "protocol", "device", "peer"],
+    # A VPN a UniFi gateway has comes from the RMM (``rmm``); its key is never
+    # read there, and stays typed here, in the vault's way.
     "groups": [
         {"key": "wat", "label": "De verbinding", "width": "half", "fields": [
-            _f("vpn_type", "Soort", "select", options=["Site-to-site", "Thuiswerkers (client)"]),
-            _f("protocol", "Protocol", "select",
-               options=["IPsec", "WireGuard", "OpenVPN", "SSL VPN", "L2TP", "Anders"]),
-            _f("device", "Op apparaat", "ref", ref="network", icon="shield",
+            _f("vpn_type", "Soort", "select", rmm="vpn_type",
+               options=["Site-to-site", "Thuiswerkers (client)", "Uitgaand (VPN-client)"]),
+            _f("protocol", "Protocol", "select", rmm="protocol",
+               options=["IPsec", "WireGuard", "OpenVPN", "SSL VPN", "L2TP", "UniFi Teleport", "UniFi Identity",
+                        "Anders"]),
+            _f("device", "Op apparaat", "ref", ref="network", icon="shield", rmm="device",
                hint="De firewall of router waarop de VPN eindigt."),
-            _f("peer", "Andere kant", icon="globe",
+            _f("peer", "Andere kant", icon="globe", rmm="peer",
                hint="Het adres of de naam van de andere kant, of wie het is (het datacenter, de vestiging)."),
-            _f("local_nets", "Netwerken hier", hint="Wat via de VPN bereikbaar is: 192.168.10.0/24."),
-            _f("remote_nets", "Netwerken aan de andere kant"),
+            _f("local_nets", "Netwerken hier", rmm="local_nets", hint="Wat via de VPN bereikbaar is: 192.168.10.0/24."),
+            _f("remote_nets", "Netwerken aan de andere kant", rmm="remote_nets"),
+            _f("client_pool", "Adressen voor clients", rmm="client_pool",
+               hint="Bij thuiswerkers: de reeks waaruit verbonden clients een adres krijgen."),
+            _f("port", "Poort", "number", rmm="port"),
         ]},
         {"key": "instellingen", "label": "Instellingen", "width": "half", "fields": [
             _f("psk", "Pre-shared key", "secret",
                hint="Versleuteld bewaard, zoals een wachtwoord in de kluis."),
-            _f("settings", "Fase 1 en 2", "textarea",
+            _f("settings", "Fase 1 en 2", "textarea", rmm="settings",
                hint="Versleuteling, hash, DH-groep, levensduur — wat aan beide kanten gelijk moet zijn."),
             _f("users", "Wie mag verbinden", hint="Bij thuiswerkers: de groep of de gebruikers."),
             _f("client_url", "Client en configuratie", icon="download",
@@ -1073,6 +1080,18 @@ def rmm_held(item: dict | None) -> set:
 
 # Where an item can be kept in step from: the RMM, or Microsoft 365.
 SYNCED = ("rmm", "m365")
+
+
+_PORTS = {"key": "ports", "rmm": "port_count"}
+
+
+def port_count(item: dict) -> int:
+    """How many ports a switch has: what UniFi says where it reports them,
+    what was typed otherwise."""
+    try:
+        return int(value_of(item, _PORTS) or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def value_of(item: dict, field: dict, held: set | None = None):

@@ -195,6 +195,7 @@ def sync() -> dict:
                      network=devices["network"])
     unifi = "" if devices["network"] is None else f", {devices['network']} uit UniFi"
     unifi += "" if not devices.get("subnets") else f", {devices['subnets']} netwerken uit UniFi"
+    unifi += "" if not devices.get("vpns") else f", {devices['vpns']} VPN's uit UniFi"
     unifi += "" if not devices.get("m365") else f", {devices['m365']} Microsoft 365-tenants"
     database.audit("rmm.sync", detail=f"{len(users)} gebruikers, {len(orgs)} klanten, "
                                       f"{devices['devices']} apparaten{unifi} "
@@ -368,7 +369,7 @@ _NET_ROLES = {"gateway": "Router", "switch": "Switch", "ap": "Wifi-punt",
 def agent_device(device_id: str) -> bool:
     """Whether this is a device in the RMM with an agent -- not a Hyper-V
     guest, not network equipment -- and so a device page there."""
-    return not str(device_id).startswith((VM_PREFIX, NET_PREFIX, SUBNET_PREFIX))
+    return not str(device_id).startswith((VM_PREFIX, NET_PREFIX, SUBNET_PREFIX, VPN_PREFIX))
 
 
 def _hex_mac(mac) -> str:
@@ -386,10 +387,14 @@ def fetch_network_devices() -> list | None:
 
 
 def network_payload(device: dict) -> dict:
+    ports = [p for p in device.get("ports") or [] if isinstance(p, dict) and isinstance(p.get("idx"), int)]
     return {"manufacturer": "Ubiquiti", "model": device.get("model") or "",
             "firmware": device.get("firmware") or "", "mgmt_ip": device.get("ip") or "",
-            # Only these come from UniFi; the rest of the page is typed.
-            "holds": NET_KEYS,
+            # Only these come from UniFi; the rest of the page is typed. A
+            # switch UniFi lists the ports of has its port count from there.
+            "holds": NET_KEYS + (["port_count"] if ports else []),
+            "port_count": max(p["idx"] for p in ports) if ports else None,
+            "ports": ports, "ports_vlans": bool(device.get("ports_vlans")),
             "source": "unifi", "type": device.get("type") or "",
             "mac": device.get("mac") or "", "state": device.get("state") or "",
             "online": device.get("state") == "online", "clients": device.get("clients"),
@@ -448,7 +453,46 @@ def sync_network(by_rmm_org: dict) -> dict | None:
                                     rmm_device_id=key, rmm=payload, label=label)
         database.sync_adapters(item["id"], nics)
         made += 1
+    # What UniFi sees plugged into a port, patched in where nothing is yet.
+    for device in devices:
+        mac = _hex_mac(device.get("mac"))
+        if device.get("ports") and len(mac) == 12:
+            item = database.item_by_rmm_device(NET_PREFIX + mac)
+            if item:
+                _patch_from_unifi(item, device["ports"])
     return {"seen": seen, "devices": len(seen), "new": made}
+
+
+def _patch_from_unifi(switch: dict, ports: list) -> None:
+    """A UniFi device below a port, or the one machine UniFi sees on it, whose
+    adapter is documented here: patched into that port -- but only into a
+    free port, and only an adapter not patched anywhere yet. What somebody
+    patched by hand is theirs; a port with several machines on it (a phone
+    with a PC behind it, a small switch) is left to people."""
+    known = None
+    for port in ports:
+        if not isinstance(port, dict) or not isinstance(port.get("idx"), int):
+            continue
+        target = _hex_mac(port.get("device_mac"))
+        if len(target) != 12:
+            clients = port.get("clients") or []
+            target = _hex_mac(clients[0].get("mac")) if len(clients) == 1 and port.get("up") else ""
+        if len(target) != 12:
+            continue
+        if known is None:
+            known = database.adapters_by_mac(switch["org_id"])
+        adapter = known.get(target)
+        if not adapter or adapter["item_id"] == switch["id"]:
+            continue
+        if database.port_holder(switch["id"], port["idx"]) or database.port_of_adapter(adapter["id"]):
+            continue
+        database.set_port(switch["id"], port["idx"], adapter_id=adapter["id"], by=None)
+        where = f"{adapter['item_name']} – {adapter['name'] or 'adapter'}"
+        database.record(switch["id"], "updated", [{"key": "port", "label": f"Poort {port['idx']}", "from": "",
+                                                   "to": f"{where} (gezien door UniFi)"}], by=None, source="rmm")
+        database.record(adapter["item_id"], "updated", [{"key": "port", "label": f"{adapter['name'] or 'Adapter'} aangesloten op",
+                                                         "from": "", "to": f"{switch['name']} poort {port['idx']} (gezien door UniFi)"}],
+                        by=None, source="rmm")
 
 
 # --------------------------------------------------------------------------- #
@@ -563,10 +607,9 @@ def _typed_subnet(org_id: str, net: dict, names: list) -> dict | None:
                  and i["name"].strip().lower() in wanted), None)
 
 
-def sync_subnets(by_rmm_org: dict) -> dict | None:
+def sync_subnets(answer: dict | None, by_rmm_org: dict) -> dict | None:
     """Every network a UniFi console has as a Netwerk item at its customer.
     None when the RMM does not read networks yet."""
-    answer = fetch_networks()
     if answer is None:
         return None
     label = lambda key: schema.label_of("subnet", key)     # noqa: E731
@@ -604,6 +647,87 @@ def sync_subnets(by_rmm_org: dict) -> dict | None:
     return {"seen": seen, "networks": len(seen), "new": made,
             "read": {c.get("id") for c in consoles if c.get("read")},
             "unread": {c.get("id") for c in consoles if not c.get("read")}}
+
+
+# --------------------------------------------------------------------------- #
+# VPN: the VPN servers, site-to-site tunnels and VPN clients a UniFi gateway has
+#
+# Each becomes a VPN item at its customer, on the gateway it ends on: what
+# kind, the protocol, the other end and the networks on either side, and --
+# where the console let the RMM read them -- IKE and ESP. Its key is never
+# read; it stays typed here, encrypted like a password.
+# --------------------------------------------------------------------------- #
+VPN_PREFIX = "unifi-vpn:"
+_VPN_KIND = {"site-to-site": "Site-to-site", "remote-access": "Thuiswerkers (client)",
+             "client": "Uitgaand (VPN-client)"}
+_VPN_PROTOCOL = {"ipsec": "IPsec", "wireguard": "WireGuard", "openvpn": "OpenVPN", "l2tp": "L2TP",
+                 "teleport": "UniFi Teleport", "uid": "UniFi Identity"}
+VPN_HISTORY = ["vpn_type", "protocol", "peer", "local_nets", "remote_nets", "client_pool", "port", "settings"]
+
+
+def vpn_payload(vpn: dict, router: str | None) -> dict:
+    data = {"source": "unifi", "console": vpn.get("console") or "", "console_id": vpn.get("console_id") or "",
+            "enabled": vpn.get("enabled") is not False, "interface": vpn.get("interface") or "",
+            "local_ip": vpn.get("local_ip") or "", "detail": bool(vpn.get("detail")),
+            "account": vpn.get("account") or "", "last_seen": vpn.get("seen_at")}
+    holds = []
+
+    def hold(key, value):
+        if value not in (None, "", []):
+            data[key] = value
+            holds.append(key)
+
+    hold("vpn_type", _VPN_KIND.get(vpn.get("kind")))
+    protocol = vpn.get("protocol") or ""
+    hold("protocol", _VPN_PROTOCOL.get(protocol, "Anders" if protocol else ""))
+    hold("device", router)
+    hold("peer", vpn.get("peer") or "")
+    hold("local_nets", ", ".join(vpn.get("local_nets") or []))
+    hold("remote_nets", ", ".join(vpn.get("remote_nets") or []))
+    hold("client_pool", vpn.get("client_pool") or "")
+    hold("port", str(vpn["port"]) if vpn.get("port") else "")
+    hold("settings", vpn.get("settings") or "")
+    data["holds"] = holds
+    return data
+
+
+def sync_vpns(answer: dict | None, by_rmm_org: dict) -> dict | None:
+    """Every VPN a UniFi console has as a VPN item at its customer. None when
+    the RMM does not read them yet."""
+    if answer is None or "vpns" not in answer:
+        return None
+    label = lambda key: schema.label_of("vpn", key)     # noqa: E731
+    vpns = [v for v in answer.get("vpns") or [] if isinstance(v, dict)]
+    count = Counter((by_rmm_org.get((v.get("org") or {}).get("id")), (v.get("name") or "").strip().lower())
+                    for v in vpns)
+    seen: set = set()
+    made = 0
+    for vpn in vpns:
+        org_id = by_rmm_org.get((vpn.get("org") or {}).get("id"))
+        key = str(vpn.get("key") or "").lower()
+        if not org_id or not key.startswith(VPN_PREFIX) or key in seen:
+            continue
+        seen.add(key)
+        plain = (vpn.get("name") or "").strip() or "VPN"
+        name = f"{plain} ({vpn['console']})" if count[(org_id, plain.lower())] > 1 and vpn.get("console") else plain
+        mac = _hex_mac(vpn.get("router_mac"))
+        router = database.item_by_rmm_device(NET_PREFIX + mac) if len(mac) == 12 else None
+        data = vpn_payload(vpn, router["id"] if router and router["org_id"] == org_id else None)
+        item = database.item_by_rmm_device(key)
+        if not item:
+            twin = database.unlinked_by_field(org_id, "vpn", "peer", vpn.get("peer") or "", plain)
+            if twin:
+                database.link_rmm(twin["id"], key, [k for k in data["holds"] if k != "device"])
+                item = database.get_item(twin["id"])
+        if item:
+            database.update_item(item["id"], rmm=data, rmm_keys=VPN_HISTORY, by=None, source="rmm", label=label)
+            continue
+        database.create_item(org_id, "vpn", name, {}, by=None, source="rmm",
+                             rmm_device_id=key, rmm=data, label=label)
+        made += 1
+    consoles = [c for c in answer.get("consoles") or [] if isinstance(c, dict)]
+    return {"seen": seen, "vpns": len(seen), "new": made,
+            "unread": {c.get("id") for c in consoles if not c.get("vpn_read")}}
 
 
 def fetch_m365_tenants() -> list | None:
@@ -705,12 +829,22 @@ def sync_devices() -> dict:
         log.warning("syncing network equipment from the RMM failed: %r", exc)
         network = None
 
-    # The networks of those consoles, after the equipment that routes them.
+    # The networks and VPNs of those consoles, after the equipment that routes them.
     try:
-        subnets = sync_subnets(by_rmm_org)
+        answer = fetch_networks()
+    except Exception as exc:
+        log.warning("reading networks from the RMM failed: %r", exc)
+        answer = None
+    try:
+        subnets = sync_subnets(answer, by_rmm_org)
     except Exception as exc:
         log.warning("syncing networks from the RMM failed: %r", exc)
         subnets = None
+    try:
+        vpns = sync_vpns(answer, by_rmm_org)
+    except Exception as exc:
+        log.warning("syncing VPNs from the RMM failed: %r", exc)
+        vpns = None
 
     # Microsoft 365 tenants, the same way: their own round, and an RMM too old
     # to read them changes nothing here.
@@ -726,7 +860,11 @@ def sync_devices() -> dict:
     # somebody needs afterwards. The same for a VM its host no longer reports.
     gone = 0
     for item in database.rmm_items():
-        if str(item["rmm_device_id"]).startswith(SUBNET_PREFIX):
+        if str(item["rmm_device_id"]).startswith(VPN_PREFIX):
+            if vpns is None or (item["rmm"] or {}).get("console_id") in vpns["unread"]:
+                continue
+            missing = item["rmm_device_id"] not in vpns["seen"]
+        elif str(item["rmm_device_id"]).startswith(SUBNET_PREFIX):
             # A network is gone when its console was read without it, or when
             # the RMM no longer watches that console; a console that could not
             # be read this time says nothing.
@@ -744,8 +882,10 @@ def sync_devices() -> dict:
         if missing:
             gone += 1
     return {"devices": device_count,
-            "new": made + vms_made + (network or {}).get("new", 0) + (subnets or {}).get("new", 0),
+            "new": made + vms_made + (network or {}).get("new", 0) + (subnets or {}).get("new", 0)
+            + (vpns or {}).get("new", 0),
             "updated": updated, "gone": gone, "vms": vms,
             "network": None if network is None else network["devices"],
             "subnets": None if subnets is None else subnets["networks"],
+            "vpns": None if vpns is None else vpns["vpns"],
             "m365": None if m365 is None else m365["tenants"]}

@@ -131,10 +131,7 @@ def gather(org: dict, hidden: set, with_passwords: bool) -> tuple[dict, list]:
                 "port": a["port"]["number"] if a.get("port") and a["port"]["switch_id"] in names else None,
             } for a in adapters]
         if item["kind"] == "network":
-            try:
-                count = int(item["fields"].get("ports") or 0)
-            except (TypeError, ValueError):
-                count = 0
+            count = schema.port_count(item)
             # A port holds an adapter; the machine behind it is only named
             # when this person may see it.
             taken = [p for p in database.ports_of(item["id"], count)
