@@ -15,10 +15,13 @@ sign-in exists alongside this one.
 """
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
+import re
 import time
 import urllib.parse
+from collections import Counter
 
 import httpx
 
@@ -191,6 +194,7 @@ def sync() -> dict:
                      users=len(users), orgs=len(orgs), devices=devices["devices"],
                      network=devices["network"])
     unifi = "" if devices["network"] is None else f", {devices['network']} uit UniFi"
+    unifi += "" if not devices.get("subnets") else f", {devices['subnets']} netwerken uit UniFi"
     unifi += "" if not devices.get("m365") else f", {devices['m365']} Microsoft 365-tenants"
     database.audit("rmm.sync", detail=f"{len(users)} gebruikers, {len(orgs)} klanten, "
                                       f"{devices['devices']} apparaten{unifi} "
@@ -364,7 +368,7 @@ _NET_ROLES = {"gateway": "Router", "switch": "Switch", "ap": "Wifi-punt",
 def agent_device(device_id: str) -> bool:
     """Whether this is a device in the RMM with an agent -- not a Hyper-V
     guest, not network equipment -- and so a device page there."""
-    return not str(device_id).startswith((VM_PREFIX, NET_PREFIX))
+    return not str(device_id).startswith((VM_PREFIX, NET_PREFIX, SUBNET_PREFIX))
 
 
 def _hex_mac(mac) -> str:
@@ -445,6 +449,161 @@ def sync_network(by_rmm_org: dict) -> dict | None:
         database.sync_adapters(item["id"], nics)
         made += 1
     return {"seen": seen, "devices": len(seen), "new": made}
+
+
+# --------------------------------------------------------------------------- #
+# Networks: the subnets and VLANs a UniFi console has
+#
+# The RMM reads them from each console (UniFi Network 10 and later) and they
+# become Netwerk items at the customer: the subnet, gateway, VLAN and DHCP as
+# UniFi has them, kept in step -- linked to the gateway or switch that routes
+# them -- and what UniFi does not know (what a network is for, its fixed
+# addresses) typed on the same page. One typed here before, with the same
+# network address, is taken over rather than doubled.
+# --------------------------------------------------------------------------- #
+SUBNET_PREFIX = "unifi-net:"
+_DHCP = {"server": "Aan", "relay": "Via een relay", "off": "Uit"}
+# What a network's name says it is for -- a first guess, typed over at will.
+_PURPOSE = [(r"gast|guest", "Gasten"), (r"cam|cctv|protect", "Camera's"), (r"\biot\b|smart", "IoT"),
+            (r"voip|voice|telefo|phone", "VoIP"), (r"beheer|mgmt|manage", "Beheer"),
+            (r"server", "Servers"), (r"dmz", "DMZ")]
+# The fields whose change the history tells; the console it is read from is shown, not told.
+SUBNET_HISTORY = ["network", "vlan", "gateway", "dhcp", "dhcp_range", "lease", "dns", "domain"]
+
+
+def fetch_networks() -> dict | None:
+    """The networks the RMM read and, per console, whether it could; None from
+    an RMM that does not read networks yet."""
+    with _client() as client:
+        r = client.get(f"{base_url()}/api/v1/networks")
+    if r.status_code == 404:
+        return None
+    r.raise_for_status()
+    return r.json()
+
+
+def _lease(seconds) -> str:
+    try:
+        s = int(seconds)
+    except (TypeError, ValueError):
+        return ""
+    if s <= 0:
+        return ""
+    if s % 86400 == 0:
+        return f"{s // 86400} {'dag' if s == 86400 else 'dagen'}"
+    if s % 3600 == 0:
+        return f"{s // 3600} uur"
+    if s % 60 == 0:
+        return f"{s // 60} minuten"
+    return f"{s} seconden"
+
+
+def _cidr(text) -> str:
+    """A network address as one way of writing it: 192.168.10.1/24 and
+    192.168.10.0 / 24 are both 192.168.10.0/24."""
+    try:
+        return str(ipaddress.ip_interface(str(text or "").replace(" ", "")).network)
+    except ValueError:
+        return ""
+
+
+def _purpose(name: str) -> str:
+    low = (name or "").lower()
+    return next((p for pattern, p in _PURPOSE if re.search(pattern, low)), "")
+
+
+def subnet_payload(net: dict, router: str | None) -> dict:
+    """What UniFi says of one network, as the fields of its item. Only what it
+    actually says is held; a network that is only a VLAN leaves the subnet and
+    DHCP to be typed."""
+    data = {"source": "unifi", "console": net.get("console") or "", "console_id": net.get("console_id") or "",
+            "site": net.get("site") or "", "management": net.get("management") or "",
+            "enabled": net.get("enabled") is not False, "default": bool(net.get("default")),
+            "isolated": net.get("isolated"), "internet": net.get("internet"),
+            "extra_subnets": net.get("extra_subnets") or [], "relay_servers": net.get("relay_servers") or [],
+            "account": net.get("account") or "", "last_seen": net.get("seen_at")}
+    holds = []
+
+    def hold(key, value):
+        if value not in (None, ""):
+            data[key] = value
+            holds.append(key)
+
+    if net.get("vlan") is not None:
+        hold("vlan", str(net["vlan"]))
+    hold("network", net.get("subnet") or "")
+    hold("gateway", net.get("gateway") or "")
+    if net.get("management") in ("gateway", "switch"):
+        hold("gateway_device", router)
+    if net.get("dhcp") in _DHCP:
+        hold("dhcp", _DHCP[net["dhcp"]])
+    if net.get("dhcp") == "server":
+        hold("dhcp_server", router)
+        if net.get("dhcp_start"):
+            hold("dhcp_range", f"{net['dhcp_start']} – {net.get('dhcp_stop') or ''}".strip(" –"))
+        hold("lease", _lease(net.get("lease_seconds")))
+        dns = ", ".join(net.get("dns") or [])
+        hold("dns", dns or (f"{net['gateway']} (automatisch)" if net.get("gateway") else ""))
+        hold("domain", net.get("domain") or "")
+    data["holds"] = holds
+    return data
+
+
+def _typed_subnet(org_id: str, net: dict, names: list) -> dict | None:
+    """A network typed here before that is this one: the same network address,
+    or -- when it has none -- the same name."""
+    candidates = database.unlinked(org_id, "subnet")
+    cidr = net.get("subnet") or ""
+    if cidr:
+        for item in candidates:
+            if _cidr(item["fields"].get("network")) == cidr:
+                return item
+    wanted = {n.strip().lower() for n in names if n}
+    return next((i for i in candidates if not i["archived"] and not _cidr(i["fields"].get("network"))
+                 and i["name"].strip().lower() in wanted), None)
+
+
+def sync_subnets(by_rmm_org: dict) -> dict | None:
+    """Every network a UniFi console has as a Netwerk item at its customer.
+    None when the RMM does not read networks yet."""
+    answer = fetch_networks()
+    if answer is None:
+        return None
+    label = lambda key: schema.label_of("subnet", key)     # noqa: E731
+    nets = [n for n in answer.get("networks") or [] if isinstance(n, dict)]
+    # Two consoles with a network of the same name: the console tells them apart.
+    count = Counter((by_rmm_org.get((n.get("org") or {}).get("id")), (n.get("name") or "").strip().lower())
+                    for n in nets)
+    seen: set = set()
+    made = 0
+    for net in nets:
+        org_id = by_rmm_org.get((net.get("org") or {}).get("id"))
+        key = str(net.get("key") or "").lower()
+        if not org_id or not key.startswith(SUBNET_PREFIX) or key in seen:
+            continue
+        seen.add(key)
+        plain = (net.get("name") or "").strip() or net.get("subnet") or "Netwerk"
+        name = f"{plain} ({net['console']})" if count[(org_id, plain.lower())] > 1 and net.get("console") else plain
+        mac = _hex_mac(net.get("router_mac"))
+        router = database.item_by_rmm_device(NET_PREFIX + mac) if len(mac) == 12 else None
+        data = subnet_payload(net, router["id"] if router and router["org_id"] == org_id else None)
+        item = database.item_by_rmm_device(key)
+        if not item:
+            twin = _typed_subnet(org_id, net, [plain, name])
+            if twin:
+                database.link_rmm(twin["id"], key, data["holds"])
+                item = database.get_item(twin["id"])
+        if item:
+            database.update_item(item["id"], rmm=data, rmm_keys=SUBNET_HISTORY, by=None, source="rmm", label=label)
+            continue
+        fields = {"purpose": _purpose(plain)} if _purpose(plain) else {}
+        database.create_item(org_id, "subnet", name, fields, by=None, source="rmm",
+                             rmm_device_id=key, rmm=data, label=label)
+        made += 1
+    consoles = [c for c in answer.get("consoles") or [] if isinstance(c, dict)]
+    return {"seen": seen, "networks": len(seen), "new": made,
+            "read": {c.get("id") for c in consoles if c.get("read")},
+            "unread": {c.get("id") for c in consoles if not c.get("read")}}
 
 
 def fetch_m365_tenants() -> list | None:
@@ -546,6 +705,13 @@ def sync_devices() -> dict:
         log.warning("syncing network equipment from the RMM failed: %r", exc)
         network = None
 
+    # The networks of those consoles, after the equipment that routes them.
+    try:
+        subnets = sync_subnets(by_rmm_org)
+    except Exception as exc:
+        log.warning("syncing networks from the RMM failed: %r", exc)
+        subnets = None
+
     # Microsoft 365 tenants, the same way: their own round, and an RMM too old
     # to read them changes nothing here.
     try:
@@ -560,7 +726,14 @@ def sync_devices() -> dict:
     # somebody needs afterwards. The same for a VM its host no longer reports.
     gone = 0
     for item in database.rmm_items():
-        if str(item["rmm_device_id"]).startswith(NET_PREFIX):
+        if str(item["rmm_device_id"]).startswith(SUBNET_PREFIX):
+            # A network is gone when its console was read without it, or when
+            # the RMM no longer watches that console; a console that could not
+            # be read this time says nothing.
+            if subnets is None or (item["rmm"] or {}).get("console_id") in subnets["unread"]:
+                continue
+            missing = item["rmm_device_id"] not in subnets["seen"]
+        elif str(item["rmm_device_id"]).startswith(NET_PREFIX):
             if network is None:
                 continue
             missing = item["rmm_device_id"] not in network["seen"]
@@ -570,7 +743,9 @@ def sync_devices() -> dict:
             database.mark_rmm_gone(item["id"], missing)
         if missing:
             gone += 1
-    return {"devices": device_count, "new": made + vms_made + (network or {}).get("new", 0),
+    return {"devices": device_count,
+            "new": made + vms_made + (network or {}).get("new", 0) + (subnets or {}).get("new", 0),
             "updated": updated, "gone": gone, "vms": vms,
             "network": None if network is None else network["devices"],
+            "subnets": None if subnets is None else subnets["networks"],
             "m365": None if m365 is None else m365["tenants"]}

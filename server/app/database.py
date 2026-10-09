@@ -660,13 +660,19 @@ def unlinked_tenant(org_id: str, tenant_id: str, name: str) -> dict | None:
     return _item_out(r) if r else None
 
 
+def unlinked(org_id: str, kind: str) -> list:
+    """What a customer has of a kind that is typed here, not kept in step from
+    elsewhere -- what a sync may take over -- oldest first."""
+    return [_item_out(r) for r in rows("SELECT * FROM items WHERE org_id=? AND kind=? AND rmm_device_id IS NULL "
+                                       "ORDER BY created_at", (org_id, kind))]
+
+
 def unlinked_by_field(org_id: str, kind: str, key: str, value: str, name: str) -> dict | None:
     """Something typed here that turns out to be what a sync now reports: the
     same customer and kind, not kept in step yet, and the same value in one
     field (an account's address) -- or, when none says one, the same name."""
     value = (value or "").strip().lower()
-    candidates = [_item_out(r) for r in rows("SELECT * FROM items WHERE org_id=? AND kind=? AND rmm_device_id IS NULL "
-                                             "ORDER BY created_at", (org_id, kind))]
+    candidates = unlinked(org_id, kind)
     if value:
         for item in candidates:
             if str(item["fields"].get(key) or "").strip().lower() == value:

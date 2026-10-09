@@ -773,6 +773,7 @@ window.DocItems = function (ctx) {
     const unifiHtml = () => {
       const u = item.rmm || {};
       if (item.source !== "rmm" || u.source !== "unifi") return "";
+      if (item.kind === "subnet") return unifiNetworkHtml(u);
       const hex = (m) => String(m || "").toLowerCase().replace(/[^0-9a-f]/g, "");
       const up = u.uplink_mac ? all.find((i) => i.rmm_device_id === `unifi:${hex(u.uplink_mac)}`) : null;
       const state = { online: ["ok", "online"], offline: ["warn", "offline"], pending: ["", "wordt bijgewerkt"] }[u.state]
@@ -796,6 +797,31 @@ window.DocItems = function (ctx) {
       return `<div class="panel" id="unifi">
           <div class="panel-head"><h2>UniFi</h2>
             <span class="sub">Zoals de RMM het ziet${u.account ? ` · ${esc(u.account)}` : ""}</span></div>
+          <div class="deflist">${rows.map(([k, v]) => `<div class="dt"><span>${k}</span></div><div class="dd">${v}</div>`).join("")}</div>
+        </div>`;
+    };
+
+    /* A network as its UniFi console has it: what routes it, whether it is
+       on, isolated, let out to the internet -- the settings beside the subnet
+       and DHCP above. */
+    const unifiNetworkHtml = (u) => {
+      const yes = (v) => (v === true ? "Ja" : v === false ? "Nee" : "");
+      const routed = { gateway: "De gateway", switch: "Een switch (layer 3)", vlan: "Niets — alleen een VLAN" }[u.management]
+        || u.management || "";
+      const rows = [
+        item.rmm_gone ? null : ["Status", u.enabled === false ? '<span class="tag warn">uitgeschakeld</span>' : '<span class="tag ok">aan</span>'],
+        routed ? ["Gerouteerd door", esc(routed)] : null,
+        u.console ? ["Console", esc(u.console) + (u.site && u.site.toLowerCase() !== "default" ? ` · ${esc(u.site)}` : "")] : null,
+        u.default ? ["Standaardnetwerk", "Ja"] : null,
+        yes(u.isolated) ? ["Geïsoleerd", yes(u.isolated)] : null,
+        yes(u.internet) ? ["Internettoegang", yes(u.internet)] : null,
+        (u.extra_subnets || []).length ? ["Extra subnetten", `<span class="mono">${esc(u.extra_subnets.join(", "))}</span>`] : null,
+        (u.relay_servers || []).length ? ["DHCP-relay naar", `<span class="mono">${esc(u.relay_servers.join(", "))}</span>`] : null,
+        u.last_seen ? ["Gezien door de RMM", esc(when(u.last_seen))] : null,
+      ].filter(Boolean);
+      return `<div class="panel" id="unifi">
+          <div class="panel-head"><h2>UniFi</h2>
+            <span class="sub">Zoals de RMM het leest${u.account ? ` · ${esc(u.account)}` : ""}</span></div>
           <div class="deflist">${rows.map(([k, v]) => `<div class="dt"><span>${k}</span></div><div class="dd">${v}</div>`).join("")}</div>
         </div>`;
     };
@@ -1965,8 +1991,10 @@ window.DocItems = function (ctx) {
     function drawReferredBy() {
       const slot = host.querySelector("#referred");
       if (!slot) return;
-      // A password that names this machine is under Wachtwoorden already.
-      const rows = (item.referred_by || []).filter((r) => !(r.kind === "password" && r.field === "device"));
+      // A password that names this machine is under Wachtwoorden already;
+      // what is in a tenant is on its tiles.
+      const rows = (item.referred_by || []).filter((r) => !(r.kind === "password" && r.field === "device")
+        && !(item.kind === "m365" && r.field === "tenant"));
       if (!rows.length) { slot.innerHTML = ""; return; }
       const groups = {};
       for (const r of rows) (groups[r.field_label] ||= []).push(r);

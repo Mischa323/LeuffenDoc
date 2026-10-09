@@ -530,7 +530,8 @@ def _referred_by(item: dict, hidden: set | None = None) -> list:
         if other["id"] == item["id"] or other["id"] in (hidden or ()):
             continue
         for field in refs.get(other["kind"], []):
-            if other["fields"].get(field["key"]) == item["id"]:
+            # Typed, or kept up from elsewhere (a network's gateway, an account's tenant).
+            if schema.value_of(other, field) == item["id"]:
                 out.append({"id": other["id"], "kind": other["kind"],
                             "name": other["name"], "archived": other["archived"],
                             "field": field["key"], "field_label": field["label"]})
