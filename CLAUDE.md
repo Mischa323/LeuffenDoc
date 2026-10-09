@@ -55,6 +55,30 @@ to arrive becomes the administrator. Never enable it on a reachable server.
 - Losing the master key means losing the vault: it lives on the data volume, so
   that volume is the backup that matters.
 
+## How everything works: things are items
+
+These are the user's standing rules for every feature, not suggestions:
+
+- **Every thing is an item with a page of its own** — the way configuration
+  items work. Whatever a customer *has* (a machine, a network, a VPN, a
+  Microsoft 365 account, a shared mailbox, a group or Team, a licence, an app
+  registration, a supplier …) is an item: listed in its section with search and
+  columns, clickable, with its own page. Never only a row in a table on
+  somebody else's page. A table field is for what is genuinely part of one
+  thing (the NAT rules of a firewall), not for things that deserve a page.
+- **Everything can be linked.** On an item's page you can link it to anything
+  else (Gekoppeld), and references read from both sides. Files and photos can
+  be added to it, and it has its history.
+- **Everything takes notes.** On every item, of every kind — built-in, a type
+  of your own, or kept up by the RMM — anyone who may change it can leave a
+  note (Notities, on the right of the page), without editing the item. A note
+  says who wrote it and when, and is searchable and in the export.
+- **What comes from elsewhere is kept up, not typed over.** Data from the RMM
+  (devices, UniFi, Microsoft 365) arrives as items too: their own fields shown
+  from the source and kept in step (`rmm` fields, `schema.rmm_held`), the rest
+  typed here — so links, notes and files on them survive every sync. An item
+  that leaves the source keeps its page and says so.
+
 ## Conventions
 
 - Verify before a push: `python -m py_compile` the changed `.py`,

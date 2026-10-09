@@ -273,6 +273,21 @@ CREATE TABLE IF NOT EXISTS item_types (
 -- configuration. Kept in the database itself, so every back-up -- the encrypted
 -- copy included -- holds them, and putting one back puts them back too. A list
 -- never reads `data`; a photo has a small `thumb` for the gallery.
+-- Notes left on an item, any item: who wrote what, and when. Not a field of
+-- the item -- they are added without editing it, and on what the RMM keeps
+-- up just the same.
+CREATE TABLE IF NOT EXISTS item_notes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id     TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    created_at  REAL NOT NULL,
+    created_by  TEXT,
+    updated_at  REAL,
+    updated_by  TEXT,
+    FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_item_notes_item ON item_notes(item_id);
+
 CREATE TABLE IF NOT EXISTS attachments (
     id          TEXT PRIMARY KEY,
     item_id     TEXT NOT NULL,
@@ -643,6 +658,21 @@ def unlinked_tenant(org_id: str, tenant_id: str, name: str) -> dict | None:
     r = row("SELECT * FROM items WHERE org_id=? AND kind='m365' AND rmm_device_id IS NULL AND archived=0 "
             "AND LOWER(name)=LOWER(?) ORDER BY created_at LIMIT 1", (org_id, name.strip()))
     return _item_out(r) if r else None
+
+
+def unlinked_by_field(org_id: str, kind: str, key: str, value: str, name: str) -> dict | None:
+    """Something typed here that turns out to be what a sync now reports: the
+    same customer and kind, not kept in step yet, and the same value in one
+    field (an account's address) -- or, when none says one, the same name."""
+    value = (value or "").strip().lower()
+    candidates = [_item_out(r) for r in rows("SELECT * FROM items WHERE org_id=? AND kind=? AND rmm_device_id IS NULL "
+                                             "ORDER BY created_at", (org_id, kind))]
+    if value:
+        for item in candidates:
+            if str(item["fields"].get(key) or "").strip().lower() == value:
+                return item
+    name = (name or "").strip().lower()
+    return next((i for i in candidates if not i["archived"] and i["name"].strip().lower() == name), None)
 
 
 def synced_items(prefix: str) -> list:
@@ -1218,6 +1248,46 @@ def _attachment_out(r: dict) -> dict:
     r = dict(r)
     r["is_image"] = bool(r.get("is_image"))
     return r
+
+
+# --------------------------------------------------------------------------- #
+# Notes
+# --------------------------------------------------------------------------- #
+def list_notes(item_id: str) -> list:
+    return rows("SELECT * FROM item_notes WHERE item_id=? ORDER BY created_at DESC, id DESC", (item_id,))
+
+
+def get_note(note_id: int) -> dict | None:
+    return row("SELECT * FROM item_notes WHERE id=?", (note_id,))
+
+
+def add_note(item_id: str, body: str, by: str | None) -> dict:
+    with write() as conn:
+        cur = conn.execute("INSERT INTO item_notes (item_id, body, created_at, created_by) VALUES (?, ?, ?, ?)",
+                           (item_id, body, time.time(), by))
+        note_id = cur.lastrowid
+    return get_note(note_id)
+
+
+def update_note(note_id: int, body: str, by: str | None) -> dict:
+    with write() as conn:
+        conn.execute("UPDATE item_notes SET body=?, updated_at=?, updated_by=? WHERE id=?",
+                     (body, time.time(), by, note_id))
+    return get_note(note_id)
+
+
+def delete_note(note_id: int) -> None:
+    with write() as conn:
+        conn.execute("DELETE FROM item_notes WHERE id=?", (note_id,))
+
+
+def notes_of_org(org_id: str) -> dict:
+    """Every note at one customer, by item -- for search and the export."""
+    out: dict = {}
+    for r in rows("SELECT n.* FROM item_notes n JOIN items i ON i.id = n.item_id WHERE i.org_id=? "
+                  "ORDER BY n.created_at", (org_id,)):
+        out.setdefault(r["item_id"], []).append(r)
+    return out
 
 
 def add_attachment(item_id: str, name: str, mime: str, data: bytes, by: str | None,

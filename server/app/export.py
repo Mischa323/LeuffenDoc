@@ -39,6 +39,15 @@ def _date(value) -> str:
     return f"{on.day}-{on.month}-{on.year}"
 
 
+def _when(seconds) -> str:
+    """A moment as a person reads it: 9-10-2026 14:05."""
+    try:
+        at = datetime.datetime.fromtimestamp(float(seconds))
+    except (TypeError, ValueError, OSError):
+        return ""
+    return f"{at.day}-{at.month}-{at.year} {at:%H:%M}"
+
+
 def raw_value(item: dict, field: dict, held: set):
     """What the page shows for a field: the RMM's figure where the RMM keeps
     it (``held``, see schema.rmm_held), the typed value otherwise."""
@@ -88,6 +97,7 @@ def gather(org: dict, hidden: set, with_passwords: bool) -> tuple[dict, list]:
     """Everything visible at one customer, and the passwords read for it."""
     items = [i for i in database.list_items(org["id"], include_archived=True) if i["id"] not in hidden]
     names = {i["id"]: i["name"] for i in items}
+    notes = database.notes_of_org(org["id"])
     kinds = schema.KINDS_all()
     read = []
     out = []
@@ -170,6 +180,9 @@ def gather(org: dict, hidden: set, with_passwords: bool) -> tuple[dict, list]:
                 record["attachments"].append({"id": f["id"], "name": f["name"], "mime": f["mime"],
                                               "size": f["size"], "is_image": f["is_image"],
                                               "path": f"{where}/{name}"})
+        written = notes.get(item["id"]) or []
+        if written:
+            record["notes"] = [{"by": n["created_by"], "at": n["created_at"], "body": n["body"]} for n in written]
         out.append(record)
     return {"customer": {"id": org["id"], "name": org["name"], "rmm_org_id": org.get("rmm_org_id")},
             "exported_at": time.time(), "with_passwords": with_passwords, "items": out}, read
@@ -267,6 +280,10 @@ def to_html(data: dict, by: str) -> str:
             if item["related"]:
                 parts.append("<div class='sub'>Gekoppeld</div><div>" +
                              ", ".join(e(r["name"]) for r in item["related"]) + "</div>")
+            if item.get("notes"):
+                parts.append("<div class='sub'>Notities</div>" + "".join(
+                    f"<div class='body'><small>{e(n['by'] or '')} · {e(_when(n['at']))}</small><br>{e(n['body'])}</div>"
+                    for n in item["notes"]))
             for f in body:
                 parts.append(f"<div class='body'>{e(f['value'])}</div>")
             if item.get("rack"):

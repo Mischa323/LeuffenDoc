@@ -594,21 +594,16 @@ def org_summary(org_id: str, user: dict = Depends(auth.current_user)):
     hidden = _hidden(user)
     counts: dict = {}
     roles: dict = {}          # per kind, per configuration type
-    m365: dict = {}           # the parts of the Microsoft 365 tenants, for the sidebar
     for item in database.list_items(org_id):
         if item["id"] not in hidden:
             counts[item["kind"]] = counts.get(item["kind"], 0) + 1
-            role = item["fields"].get("role")
+            # The type as the page shows it: typed, or kept up by the RMM.
+            role = (schema.value_of(item, {"key": "role", "rmm": "role"})
+                    if item["kind"] in schema.SUBTYPES else None)
             if role and item["kind"] in schema.SUBTYPES:
                 per = roles.setdefault(item["kind"], {})
                 per[role] = per.get(role, 0) + 1
-            if item["kind"] == "m365":
-                held = schema.rmm_held(item)
-                for key, field in schema.fields_of("m365").items():
-                    value = schema.value_of(item, field, held)
-                    if field["type"] == "table" and isinstance(value, list):
-                        m365[key] = m365.get(key, 0) + len(value)
-    return {"org": org, "counts": counts, "roles": roles, "m365": m365}
+    return {"org": org, "counts": counts, "roles": roles}
 
 
 @app.post("/api/orgs/{org_id}/items")
@@ -723,6 +718,75 @@ def remove_item(item_id: str, request: Request,
 # item's history says who did. Only a real picture (Pillow says so, not the
 # name) or a PDF is shown in the browser; anything else is downloaded.
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# Notes: on every item, of every kind, added without editing it. Whoever may
+# change the item may leave one; a note is changed or removed by whoever wrote
+# it, or an administrator.
+# --------------------------------------------------------------------------- #
+_NOTE_MAX = 10000
+
+
+def _note_text(body: dict) -> str:
+    text = str((body or {}).get("body") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Een lege notitie bewaren heeft geen zin")
+    if len(text) > _NOTE_MAX:
+        raise HTTPException(status_code=400, detail=f"Een notitie is hoogstens {_NOTE_MAX} tekens")
+    return text
+
+
+def _note_for(user: dict, note_id: int) -> tuple[dict, dict]:
+    note = database.get_note(note_id)
+    if not note:
+        raise HTTPException(status_code=404, detail="Deze notitie bestaat niet")
+    item, _ = _item_for(user, note["item_id"], "edit")
+    if note["created_by"] != user["email"] and not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Alleen wie een notitie schreef, of een beheerder, past hem aan")
+    return note, item
+
+
+def _note_said(text: str) -> str:
+    first = text.splitlines()[0]
+    return first if len(first) <= 80 else first[:79] + "…"
+
+
+@app.get("/api/items/{item_id}/notes")
+def list_notes(item_id: str, user: dict = Depends(auth.current_user)):
+    _item_for(user, item_id)
+    return database.list_notes(item_id)
+
+
+@app.post("/api/items/{item_id}/notes")
+async def add_note(item_id: str, request: Request, user: dict = Depends(auth.current_user)):
+    item, _ = _item_for(user, item_id, "edit")
+    text = _note_text(await request.json())
+    note = database.add_note(item_id, text, user["email"])
+    database.record(item_id, "updated", [{"key": "note", "label": "Notitie", "said": f"toegevoegd: {_note_said(text)}"}],
+                    by=user["email"])
+    return note
+
+
+@app.patch("/api/notes/{note_id}")
+async def edit_note(note_id: int, request: Request, user: dict = Depends(auth.current_user)):
+    note, item = _note_for(user, note_id)
+    text = _note_text(await request.json())
+    if text == note["body"]:
+        return note
+    updated = database.update_note(note_id, text, user["email"])
+    database.record(item["id"], "updated", [{"key": "note", "label": "Notitie", "said": f"aangepast: {_note_said(text)}"}],
+                    by=user["email"])
+    return updated
+
+
+@app.delete("/api/notes/{note_id}")
+def delete_note(note_id: int, user: dict = Depends(auth.current_user)):
+    note, item = _note_for(user, note_id)
+    database.delete_note(note_id)
+    database.record(item["id"], "updated", [{"key": "note", "label": "Notitie",
+                                             "said": f"verwijderd: {_note_said(note['body'])}"}], by=user["email"])
+    return {"ok": True}
+
+
 def _attachment_for(user: dict, attachment_id: str, need: str = "read") -> dict:
     found = database.get_attachment(attachment_id)
     if not found:
@@ -1288,11 +1352,16 @@ def search(q: str = "", org: str = "", user: dict = Depends(auth.current_user)):
     hidden = _hidden(user)
     results = []
     for org in orgs:
+        notes = database.notes_of_org(org["id"])
         for item in database.list_items(org["id"], include_archived=True):
             if item["id"] in hidden:
                 continue
             fields = schema.fields_of(item["kind"])
             hits = []
+            # What was written in a note is found like what is in a field.
+            for note in notes.get(item["id"], []):
+                if needle in note["body"].lower():
+                    hits.append({"where": "Notitie", "text": _snippet(note["body"], needle)})
             if needle in item["name"].lower():
                 hits.append({"where": "Naam", "text": item["name"]})
             for key, value in item["fields"].items():

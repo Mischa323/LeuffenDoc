@@ -272,8 +272,21 @@
     /* Scrolled to (a copy being made): clear of the bar that stays at the top. */
     #new-item { scroll-margin-top: 84px; }
     /* The sections under an item's blocks, spaced like the blocks themselves. */
-    #files > *, #secret > *, #access > *, #adapters > *, #ports > *, #passwords > *,
-    #referred > *, #related > *, #history > *, #unifi { margin-bottom: 14px; }
+    #files > *, #notes > *, #secret > *, #access > *, #adapters > *, #ports > *, #passwords > *,
+    #referred > *, #related > *, #history > *, #unifi, .m365-links { margin-bottom: 14px; }
+
+    /* ---- notes, on every item ---- */
+    .note-new { padding: 12px 14px; border-bottom: 1px solid var(--border-soft); }
+    .note-new textarea { width: 100%; resize: vertical; min-height: 54px; }
+    .note-new-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+    .note-new-foot .hint { margin: 0 auto 0 0; }
+    .note { padding: 10px 14px; border-bottom: 1px solid var(--border-soft); }
+    .note:last-child { border-bottom: 0; }
+    .note-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+    .note-head b { font-weight: 600; }
+    .note-acts { margin-left: auto; display: inline-flex; gap: 2px; }
+    .note-body { margin-top: 5px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .note-body textarea { width: 100%; }
 
     /* ---- an item's page: what it is on the left, what hangs off it on the right ---- */
     .item-cols { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 0 14px; align-items: start; }
@@ -848,7 +861,6 @@
   <script src="/settings.js"></script>
   <script src="/vault.js"></script>
   <script src="/sidebar.js"></script>
-  <script src="/m365.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

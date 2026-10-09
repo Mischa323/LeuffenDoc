@@ -103,6 +103,11 @@ window.DocItems = function (ctx) {
   // Where a held value comes from -- the RMM, or Microsoft 365 -- as a tag says it.
   const SYNCED = { rmm: { tag: "RMM", from: "uit de RMM" }, m365: { tag: "365", from: "uit Microsoft 365" } };
 
+  // An item's type (Soort): typed, or kept up from elsewhere (an account's).
+  function roleIn(item) {
+    return held(item, { rmm: "role" }) ? (item.rmm || {}).role : (item.fields || {}).role;
+  }
+
   function valueOf(item, field) {
     if (held(item, field)) return (item.rmm || {})[field.rmm] ?? "";
     return item.fields[field.key] ?? "";
@@ -423,7 +428,7 @@ window.DocItems = function (ctx) {
 
   // What something is, as a list says it: its type where it has one.
   function typeCell(item) {
-    const s = subtypesOf([item.kind]).find((t) => t.role === (item.fields || {}).role);
+    const s = subtypesOf([item.kind]).find((t) => t.role === roleIn(item));
     return s ? `${ICON[s.icon] || ICON[KINDS[item.kind].icon]} ${esc(s.label)}`
              : `${ICON[KINDS[item.kind].icon]} ${esc(KINDS[item.kind].label)}`;
   }
@@ -443,7 +448,7 @@ window.DocItems = function (ctx) {
     const subs = subtypesOf(allowed);
     const typeId = params.get("type");
     const sub = subs.find((s) => s.id === typeId) || null;
-    const roleOf = (i) => (i.fields || {}).role;
+    const roleOf = (i) => roleIn(i);
     const typed = (i) => subs.some((s) => s.kind === i.kind && s.role === roleOf(i));
     const inType = (i) => (sub ? i.kind === sub.kind && roleOf(i) === sub.role
                                : typeId === "geen" ? !typed(i) : true);
@@ -726,32 +731,35 @@ window.DocItems = function (ctx) {
       </div>`;
 
     const readBlocks = () => blocksHtml(spec.groups.map((group) => ({ width: group.width, html: (() => {
-      // A tenant the RMM keeps up has its long lists as pages of their own
-      // (Microsoft 365 in the sidebar); here stays what is typed.
-      const fields = group.fields.filter((f) => !f.hidden && !(item.kind === "m365" && f.type === "table" && held(item, f)));
+      const fields = group.fields.filter((f) => !f.hidden);
       // A page of text does not belong in a label-and-value grid; it gets the
       // width of the panel and keeps the line breaks it was written with.
       const long = fields.filter((f) => f.long && display(item, f, all));
+      // Where a whole block comes from elsewhere (the RMM, Microsoft 365), it
+      // says so once, on the block -- not on every line of it.
+      const shown = fields.filter((f) => display(item, f, all));
+      const blockTag = shown.length && shown.every((f) => held(item, f)) ? SYNCED[item.source].tag : "";
       const rows = fields.filter((f) => !f.long).map((f) => {
         const text = display(item, f, all);
         if (!text) return "";
         const raw = valueOf(item, f);
-        const ref = f.type === "ref" && item.fields[f.key]
-          ? `<a data-goto="${esc(item.fields[f.key])}">${esc(text)}</a>`
+        const ref = f.type === "ref" && raw
+          ? `<a data-goto="${esc(raw)}">${esc(text)}</a>`
           : f.type === "list"
             ? (Array.isArray(raw) ? raw : []).map((e) => `<div class="lline">
                 ${e.label ? `<span class="tag">${esc(e.label)}</span>` : ""}
                 <span>${esc(e.value)}</span></div>`).join("")
             : cell(item, f, all);
         return `<div class="dt">${f.icon && ICON[f.icon] ? `<span class="dt-ic">${ICON[f.icon]}</span>` : ""}
-                  <span>${esc(f.label)}</span>${held(item, f) ? ` <span class="tag sm">${SYNCED[item.source].tag}</span>` : ""}</div>
+                  <span>${esc(f.label)}</span>${held(item, f) && !blockTag ? ` <span class="tag sm">${SYNCED[item.source].tag}</span>` : ""}</div>
                 <div class="dd">${ref}</div>`;
       }).join("");
       if (!rows && !long.length) return "";
       return `<div class="panel">
-          <div class="panel-head"><h2>${esc(group.label)}</h2></div>
+          <div class="panel-head"><h2>${esc(group.label)}</h2>${blockTag
+            ? `<span class="tag sm" title="${esc(SYNCED[item.source].from)}">${blockTag}</span>` : ""}</div>
           ${rows ? `<div class="deflist">${rows}</div>` : ""}
-          ${long.map((f) => (f.type === "table" ? tableHtml(f, valueOf(item, f), held(item, f) ? SYNCED[item.source].tag : "")
+          ${long.map((f) => (f.type === "table" ? tableHtml(f, valueOf(item, f), held(item, f) && !blockTag ? SYNCED[item.source].tag : "")
             : `<div class="longtext">${esc(display(item, f, all))}</div>`)).join("")}
         </div>`;
     })() }))) || `<div class="panel"><div class="empty">
@@ -813,10 +821,15 @@ window.DocItems = function (ctx) {
         return;
       }
       const problems = r.problems || [];
-      const parts = ctx.m365Parts ? ctx.m365Parts() : [];
-      const count = (key) => (Array.isArray(r[key]) ? r[key].length : null);
-      const tiles = parts.filter((p) => !p.key || count(p.key) !== null).map((p) => `<button type="button" class="m3-tile" data-part="${p.id}">
-          <b>${p.key ? count(p.key) : "→"}</b><span>${ICON[p.icon] || ""} ${esc(p.label)}</span></button>`).join("");
+      // What is in this tenant, each a section of its own: how many, a click away.
+      const inTenant = (kind) => all.filter((i) => i.kind === kind && !i.archived
+        && (held(i, { rmm: "tenant" }) ? (i.rmm || {}).tenant : (i.fields || {}).tenant) === item.id).length;
+      const tiles = [["m365user", "Accounts", "user"], ["m365mailbox", "Gedeelde mailboxen", "mail"],
+                     ["m365group", "Groepen & Teams", "nodes"], ["m365app", "App-registraties", "key"],
+                     ["license", "Abonnementen", "clipboard"]]
+        .map(([kind, label, icon]) => [kind, label, icon, inTenant(kind)]).filter(([, , , n]) => n)
+        .map(([kind, label, icon, n]) => `<button type="button" class="m3-tile" data-kind="${kind}">
+          <b>${n}</b><span>${ICON[icon] || ""} ${esc(label)}</span></button>`).join("");
       slot.innerHTML = `<div class="panel m365-panel">
           <div class="panel-head"><h2>Microsoft 365</h2>
             <span class="sub">${r.ok ? `gelezen door de RMM ${when(r.read_at)}` : `<span class="tag warn">lezen mislukt</span>`}
@@ -830,10 +843,46 @@ window.DocItems = function (ctx) {
               Dat regel je in de app-registratie van de klant; de RMM leest daarna weer.</div></div>` : ""}
           ${tiles ? `<div class="m3-tiles">${tiles}</div>` : ""}
         </div>`;
-      slot.querySelectorAll("[data-part]").forEach((b) => {
-        b.onclick = () => go(`#/klant/${org.id}/microsoft365?deel=${b.dataset.part}`);
+      slot.querySelectorAll("[data-kind]").forEach((b) => {
+        const section = ctx.sectionOf && ctx.sectionOf(b.dataset.kind);
+        b.onclick = () => section && go(`#/klant/${org.id}/${section.id}`);
       });
     }
+
+    /* Microsoft 365 and the rest of the page, matched by name: an account's
+       devices in Intune that are documented here as well, the shared
+       mailboxes it may reach -- and, on a machine's page, the accounts that
+       use it. Read from what is there, so nothing has to be linked by hand. */
+    const m365LinksHtml = () => {
+      const val = (i, key) => (held(i, { rmm: key }) ? (i.rmm || {})[key] : (i.fields || {})[key]);
+      const lower = (v) => String(v || "").trim().toLowerCase();
+      const link = (i, extra) => `<div class="rel-row" data-goto="${esc(i.id)}">
+          <span class="rel-ic">${ICON[(KINDS[i.kind] || {}).icon] || ICON.link}</span>
+          <span class="rel-name">${esc(i.name)}</span>${extra ? `<small>${esc(extra)}</small>` : ""}</div>`;
+      const panel = (title, rows) => (rows.length ? `<div class="panel m365-links"><div class="panel-head"><h2>${esc(title)}</h2>
+          <span class="sub">${rows.length}</span></div>${rows.join("")}</div>` : "");
+      if (item.kind === "m365user") {
+        const devices = Array.isArray(val(item, "devices")) ? val(item, "devices") : [];
+        const names = new Set(devices.map((d) => lower(d.name)).filter(Boolean));
+        const serials = new Set(devices.map((d) => lower(d.serial)).filter(Boolean));
+        const machines = all.filter((i) => ["computer", "network", "printer"].includes(i.kind) && !i.archived
+          && (names.has(lower(i.name)) || (serials.size && serials.has(lower(val(i, "serial"))))));
+        const me = [lower(item.name), lower(val(item, "upn")), lower(val(item, "mail"))].filter(Boolean);
+        const boxes = all.filter((i) => i.kind === "m365mailbox" && !i.archived
+          && (Array.isArray(val(i, "access")) ? val(i, "access") : []).some((a) => me.includes(lower(a.who))));
+        const box = (b) => ((val(b, "access") || []).find((a) => me.includes(lower(a.who))) || {}).rights || "";
+        return panel("Apparaten die hier ook staan", machines.map((m) => link(m, (KINDS[m.kind] || {}).label)))
+          + panel("Toegang tot gedeelde mailboxen", boxes.map((b) => link(b, box(b))));
+      }
+      if (["computer", "network", "printer"].includes(item.kind)) {
+        const serial = lower(val(item, "serial"));
+        const users = all.filter((i) => i.kind === "m365user" && !i.archived
+          && (Array.isArray(val(i, "devices")) ? val(i, "devices") : [])
+            .some((d) => lower(d.name) === lower(item.name) || (serial && lower(d.serial) === serial)));
+        return panel("Gebruikt door (Microsoft 365)", users.map((u) => link(u, val(u, "upn"))));
+      }
+      return "";
+    };
 
     const draw = async () => {
       const goneNote = item.rmm_gone ? `<div class="callout warn" style="margin-bottom:14px">
@@ -868,10 +917,11 @@ window.DocItems = function (ctx) {
                      + (item.kind === "m365" ? `<div id="m365"></div>` : "")
                      + (item.kind === "rack" ? "" : readBlocks())
                      + unifiHtml()
+                     + m365LinksHtml()
                      + `<div id="secret"></div><div id="access"></div>`
                      + `<div id="adapters"></div><div id="ports"></div>`
                      + `</div><aside class="item-side">`
-                     + `<div id="files"></div><div id="passwords"></div>`
+                     + `<div id="files"></div><div id="notes"></div><div id="passwords"></div>`
                      + `<div id="related"></div><div id="referred"></div><div id="history"></div>`
                      + `</aside></div>`);
       wireHead();
@@ -904,6 +954,7 @@ window.DocItems = function (ctx) {
         }
         if (Rack && item.kind !== "rack") Rack.whereHangs(host.querySelector("#in-rack"), org, item.id);
         drawFiles();
+        drawNotes();
         drawSecret();
         drawAccess();
         drawAdapters();
@@ -971,6 +1022,83 @@ window.DocItems = function (ctx) {
     const kb = (n) => n >= 1048576 ? `${(n / 1048576).toFixed(1).replace(".", ",")} MB`
       : `${Math.max(1, Math.round(n / 1024))} kB`;
     let files = [];
+
+    /* Notes: left on anything -- a machine, an account, a password -- without
+       editing it, by whoever may change it. Who wrote it and when; changed or
+       removed by whoever wrote it, or an administrator. */
+    async function drawNotes() {
+      const slot = host.querySelector("#notes");
+      if (!slot) return;
+      let notes;
+      try { notes = await api(`/api/items/${item.id}/notes`); } catch (e) { slot.innerHTML = ""; return; }
+      const me = (ctx.me && ctx.me()) || {};
+      const mine = (n) => mayEdit && (n.created_by === me.email || me.is_admin);
+      if (!notes.length && !mayEdit) { slot.innerHTML = ""; return; }
+      slot.innerHTML = `<div class="panel notes-panel">
+          <div class="panel-head"><h2>Notities</h2><span class="sub">${notes.length || "Nog geen"}</span></div>
+          ${mayEdit ? `<div class="note-new">
+              <textarea class="inp" id="note-text" rows="2" placeholder="Laat een notitie achter…" aria-label="Nieuwe notitie"></textarea>
+              <div class="note-new-foot"><span class="hint">Ctrl+Enter bewaart</span>
+                <button class="btn sm" id="note-add">${ICON.plus} Toevoegen</button></div></div>` : ""}
+          ${notes.map((n) => `<div class="note" data-note="${n.id}">
+              <div class="note-head"><b>${esc(n.created_by || "")}</b>
+                <span class="muted">${when(n.created_at)}${n.updated_at ? " · aangepast" : ""}</span>
+                ${mine(n) ? `<span class="note-acts">
+                  <button type="button" class="lay-ib" data-edit title="Aanpassen">${ICON.pencil}</button>
+                  <button type="button" class="lay-ib" data-del title="Verwijderen">${ICON.trash}</button></span>` : ""}</div>
+              <div class="note-body">${esc(n.body)}</div></div>`).join("")}
+        </div>`;
+      const box = slot.querySelector("#note-text");
+      const add = slot.querySelector("#note-add");
+      const save = async () => {
+        const text = box.value.trim();
+        if (!text) { box.focus(); return; }
+        add.disabled = true;
+        try {
+          await api(`/api/items/${item.id}/notes`, { method: "POST", headers: { "Content-Type": "application/json" },
+                                                    body: JSON.stringify({ body: text }) });
+          toast("Notitie bewaard");
+          await drawNotes();
+          drawHistory();
+        } catch (e) { toast(e.message); add.disabled = false; }
+      };
+      if (add) {
+        add.onclick = save;
+        box.onkeydown = (ev) => { if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); save(); } };
+      }
+      slot.querySelectorAll(".note").forEach((el) => {
+        const id = el.dataset.note;
+        const note = notes.find((n) => String(n.id) === id);
+        const edit = el.querySelector("[data-edit]");
+        if (edit) edit.onclick = () => {
+          el.querySelector(".note-body").innerHTML = `<textarea class="inp" rows="3">${esc(note.body)}</textarea>
+            <div class="note-new-foot"><button class="btn ghost sm" data-cancel>Annuleren</button>
+              <button class="btn sm" data-save>${ICON.save} Bewaren</button></div>`;
+          const area = el.querySelector("textarea");
+          area.focus();
+          el.querySelector("[data-cancel]").onclick = () => drawNotes();
+          el.querySelector("[data-save]").onclick = async () => {
+            try {
+              await api(`/api/notes/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" },
+                                             body: JSON.stringify({ body: area.value }) });
+              toast("Notitie aangepast");
+              await drawNotes();
+              drawHistory();
+            } catch (e) { toast(e.message); }
+          };
+        };
+        const del = el.querySelector("[data-del]");
+        if (del) del.onclick = async () => {
+          if (!window.confirm("Deze notitie verwijderen?")) return;
+          try {
+            await api(`/api/notes/${id}`, { method: "DELETE" });
+            toast("Notitie verwijderd");
+            await drawNotes();
+            drawHistory();
+          } catch (e) { toast(e.message); }
+        };
+      });
+    }
 
     async function drawFiles() {
       const slot = host.querySelector("#files");
@@ -1912,7 +2040,7 @@ window.DocItems = function (ctx) {
        fit in a drop-down. */
     function wireLinkSearch(search, box, options) {
       const typeOf = (o) => {
-        const sub = subtypesOf([o.kind]).find((s) => s.role === (o.fields || {}).role);
+        const sub = subtypesOf([o.kind]).find((s) => s.role === roleIn(o));
         return sub ? sub.label : "";
       };
       const hay = new Map(options.map((o) => [o.id,

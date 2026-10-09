@@ -416,11 +416,12 @@ def _cols(*spec) -> list:
 
 M365 = {
     "label": "Microsoft 365-tenant",
-    "plural": "Microsoft 365",
+    "plural": "Tenants",
     "icon": "cloud",
     "family": "onderdeel",
-    "sub": "De tenant: domeinen, abonnementen, gebruikers, mailboxen en groepen",
-    "backref": "Wat hiernaar verwijst",
+    "sub": "De tenant zelf: domeinen, beveiliging, SharePoint — de accounts, mailboxen, groepen en "
+           "app-registraties zijn items van zichzelf",
+    "backref": "Wat bij deze tenant hoort",
     "columns": ["primary_domain", "security_defaults", "partner"],
     "groups": [
         {"key": "tenant", "label": "Tenant", "width": "half", "fields": [
@@ -441,36 +442,9 @@ M365 = {
             _f("ca", "Conditional Access", "table", long=True, rmm="ca", icon="shieldCheck",
                columns=_cols(("name", "Beleid"), ("state", "Staat"))),
         ]},
-        {"key": "abonnementen", "label": "Abonnementen", "fields": [
-            _f("subscriptions", "Abonnementen", "table", long=True, rmm="subscriptions", icon="clipboard",
-               columns=_cols(("product", "Product"), ("seats", "Aantal"), ("used", "In gebruik"),
-                             ("renews", "Verlengt op", {"expiry": True}), ("status", "Staat"))),
-        ]},
-        {"key": "gebruikers", "label": "Gebruikers", "fields": [
-            _f("users", "Gebruikers", "table", long=True, rmm="users", icon="user",
-               columns=_cols(("name", "Naam"), ("account", "Account"), ("licenses", "Licenties"),
-                             ("job", "Functie"), ("enabled", "Kan aanmelden"), ("kind", "Soort"))),
-        ]},
-        {"key": "mailboxen", "label": "Mailboxen", "fields": [
-            _f("shared", "Gedeelde mailboxen, ruimtes en apparatuur", "table", long=True, rmm="shared", icon="mail",
-               columns=_cols(("mailbox", "Adres"), ("name", "Naam"), ("kind", "Soort"))),
-            _f("shared_access", "Wie bij welke mailbox kan", "table", long=True, icon="lock",
-               columns=_cols(("mailbox", "Mailbox"), ("who", "Wie"),
-                             ("rights", "Rechten", {"options": ["Volledige toegang", "Verzenden als",
-                                                                "Verzenden namens", "Lezen"]})),
-               hint="Microsoft Graph zegt dit niet; het wordt hier bijgehouden."),
-        ]},
-        {"key": "groepen", "label": "Groepen en Teams", "fields": [
-            _f("groups", "Groepen, Teams en distributielijsten", "table", long=True, rmm="groups", icon="nodes",
-               columns=_cols(("name", "Naam"), ("mail", "Adres"), ("kind", "Soort"), ("members", "Leden"))),
+        {"key": "sharepoint", "label": "SharePoint", "fields": [
             _f("sites", "SharePoint-sites", "table", long=True, rmm="sites", icon="folder",
                columns=_cols(("name", "Site"), ("url", "Adres", {"link": True}))),
-        ]},
-        {"key": "apps", "label": "App-registraties", "fields": [
-            _f("apps", "Secrets en certificaten", "table", long=True, rmm="apps", icon="key",
-               columns=_cols(("app", "App"), ("kind", "Soort"), ("name", "Omschrijving"),
-                             ("expires", "Verloopt op", {"expiry": True})),
-               hint="Een verlopen secret is een koppeling die stilletjes stopt; de bel waarschuwt ervoor."),
         ]},
         {"key": "over", "label": "Over", "fields": [
             _f("notes", "Notities", "textarea"),
@@ -480,6 +454,167 @@ M365 = {
 
 # What Microsoft 365 fills, once linked.
 M365_KEYS = [f["rmm"] for g in M365["groups"] for f in g["fields"] if f.get("rmm")]
+
+
+def _tenant() -> dict:
+    return _f("tenant", "Tenant", "ref", ref="m365", rmm="tenant", icon="cloud")
+
+
+# The things in a tenant, each an item of its own -- clickable, linkable, with
+# notes and files -- the way configuration items are. What Microsoft 365 says
+# about them is kept up by the RMM (``rmm`` fields); what only people know is
+# typed. Without the RMM they are typed like anything else.
+M365USER = {
+    "label": "Microsoft 365-account",
+    "plural": "Accounts",
+    "icon": "user",
+    "family": "onderdeel",
+    "sub": "Wie er in de tenant zit: licenties, afdeling, MFA, laatste aanmelding, apparaten",
+    "backref": "Wat aan dit account gekoppeld is",
+    "columns": ["role", "upn", "department", "licenses", "last_sign_in"],
+    "groups": [
+        {"key": "account", "label": "Account", "width": "half", "fields": [
+            _f("role", "Soort", "select", options=["Gebruiker", "Gast", "Geblokkeerd"], rmm="role"),
+            _f("upn", "Account", rmm="upn", icon="user"),
+            _f("mail", "E-mailadres", rmm="mail", icon="mail"),
+            _f("aliases", "Aliassen", "list", rmm="aliases"),
+            _f("licenses", "Licenties", "list", rmm="licenses", icon="clipboard"),
+            _tenant(),
+            _f("created", "Aangemaakt", rmm="created"),
+            _f("synced", "Uit Active Directory", rmm="synced"),
+        ]},
+        {"key": "persoon", "label": "Persoon", "width": "half", "fields": [
+            _f("job", "Functie", rmm="job"),
+            _f("department", "Afdeling", rmm="department"),
+            _f("company", "Bedrijf", rmm="company"),
+            _f("office", "Kantoor", rmm="office", icon="building"),
+            _f("phones", "Telefoon", "list", rmm="phones", icon="phone", labels=["Werk", "Mobiel"]),
+            _f("city", "Plaats", rmm="city"),
+            _f("manager", "Manager", rmm="manager", icon="user"),
+            _f("employee_id", "Personeelsnummer", rmm="employee_id"),
+            _f("contact", "Contactpersoon", "ref", ref="contact", icon="user",
+               hint="Dezelfde persoon als contactpersoon van de klant."),
+        ]},
+        {"key": "beveiliging", "label": "Beveiliging", "width": "half", "fields": [
+            _f("mfa", "MFA", rmm="mfa", icon="shieldCheck"),
+            _f("mfa_default", "Standaardmethode", rmm="mfa_default"),
+            _f("roles", "Beheerdersrollen", "list", rmm="roles", icon="shield"),
+            _f("last_sign_in", "Laatst aangemeld", rmm="last_sign_in", icon="clock"),
+            _f("last_sign_in_background", "Laatst actief op de achtergrond", rmm="last_sign_in_background"),
+            _f("password_changed", "Wachtwoord gewijzigd", rmm="password_changed", icon="key"),
+        ]},
+        {"key": "mailbox", "label": "Mailbox", "width": "half", "fields": [
+            _f("mailbox_size", "Grootte", rmm="mailbox_size", icon="mail"),
+            _f("mailbox_items", "Items", rmm="mailbox_items"),
+            _f("mailbox_activity", "Laatst actief", rmm="mailbox_activity"),
+        ]},
+        {"key": "groepen", "label": "Groepen en Teams", "fields": [
+            _f("groups", "Lid van", "list", rmm="groups", icon="nodes"),
+        ]},
+        {"key": "apparaten", "label": "Apparaten", "fields": [
+            _f("devices", "Apparaten in Intune", "table", long=True, rmm="devices", icon="desktop",
+               columns=_cols(("name", "Naam"), ("os", "Systeem"), ("compliance", "Voldoet"),
+                             ("last_sync", "Laatst gezien"), ("model", "Model"), ("serial", "Serienummer"))),
+        ]},
+        {"key": "over", "label": "Over", "fields": [
+            _f("notes", "Notities", "textarea"),
+        ]},
+    ],
+}
+
+M365MAILBOX = {
+    "label": "Gedeelde mailbox",
+    "plural": "Gedeelde mailboxen",
+    "icon": "mail",
+    "family": "onderdeel",
+    "sub": "Gedeelde mailboxen, ruimtes en apparatuur — en wie erbij kan",
+    "backref": "Wat aan deze mailbox gekoppeld is",
+    "columns": ["role", "address", "mailbox_size"],
+    "groups": [
+        {"key": "mailbox", "label": "Mailbox", "width": "half", "fields": [
+            _f("role", "Soort", "select", options=["Gedeeld", "Ruimte", "Apparatuur"], rmm="role"),
+            _f("address", "Adres", rmm="address", icon="mail"),
+            _f("aliases", "Aliassen", "list", rmm="aliases"),
+            _tenant(),
+            _f("mailbox_size", "Grootte", rmm="mailbox_size"),
+            _f("mailbox_items", "Items", rmm="mailbox_items"),
+            _f("mailbox_activity", "Laatst actief", rmm="mailbox_activity"),
+        ]},
+        {"key": "toegang", "label": "Wie erbij kan", "width": "half", "fields": [
+            _f("access", "Wie erbij kan", "table", long=True, icon="lock",
+               columns=_cols(("who", "Wie"),
+                             ("rights", "Rechten", {"options": ["Volledige toegang", "Verzenden als",
+                                                                "Verzenden namens", "Lezen"]})),
+               hint="Microsoft Graph zegt dit niet; het wordt hier bijgehouden."),
+            _f("purpose", "Waarvoor", "textarea"),
+        ]},
+        {"key": "over", "label": "Over", "fields": [
+            _f("notes", "Notities", "textarea"),
+        ]},
+    ],
+}
+
+M365GROUP = {
+    "label": "Groep of Team",
+    "plural": "Groepen & Teams",
+    "icon": "nodes",
+    "family": "onderdeel",
+    "sub": "Teams, Microsoft 365-groepen, distributielijsten en beveiligingsgroepen, met hun leden",
+    "backref": "Wat aan deze groep gekoppeld is",
+    "columns": ["role", "mail", "member_count"],
+    "groups": [
+        {"key": "groep", "label": "Groep", "width": "half", "fields": [
+            _f("role", "Soort", "select",
+               options=["Team", "Microsoft 365-groep", "Distributielijst", "Beveiligingsgroep"], rmm="role"),
+            _f("mail", "Adres", rmm="mail", icon="mail"),
+            _f("description", "Omschrijving", rmm="description"),
+            _f("visibility", "Zichtbaarheid", rmm="visibility"),
+            _f("member_count", "Aantal leden", rmm="member_count"),
+            _tenant(),
+            _f("created", "Aangemaakt", rmm="created"),
+            _f("purpose", "Waarvoor", "textarea"),
+        ]},
+        {"key": "leden", "label": "Leden", "width": "half", "fields": [
+            _f("owners", "Eigenaren", "list", rmm="owners", icon="user"),
+            _f("members", "Leden", "list", rmm="members", icon="user"),
+        ]},
+        {"key": "over", "label": "Over", "fields": [
+            _f("notes", "Notities", "textarea"),
+        ]},
+    ],
+}
+
+M365APP = {
+    "label": "App-registratie",
+    "plural": "App-registraties",
+    "icon": "key",
+    "family": "onderdeel",
+    "sub": "App-registraties met hun secrets en certificaten — en wanneer die verlopen",
+    "backref": "Wat aan deze app-registratie gekoppeld is",
+    "columns": ["app_id", "next_expiry", "used_by"],
+    "groups": [
+        {"key": "app", "label": "App", "width": "half", "fields": [
+            _f("app_id", "Application-ID", rmm="app_id", icon="clipboard"),
+            _f("next_expiry", "Eerstvolgende verloopdatum", "date", expiry=True, rmm="next_expiry", icon="clock",
+               hint="Van het secret of certificaat dat het eerst verloopt."),
+            _f("audience", "Wie mag aanmelden", rmm="audience"),
+            _tenant(),
+            _f("created", "Aangemaakt", rmm="created"),
+        ]},
+        {"key": "gebruik", "label": "Gebruik", "width": "half", "fields": [
+            _f("used_by", "Gebruikt door", "ref", ref="application", icon="package",
+               hint="De applicatie of koppeling die met deze app-registratie aanmeldt."),
+            _f("purpose", "Waarvoor", "textarea"),
+        ]},
+        {"key": "geheimen", "label": "Secrets en certificaten", "fields": [
+            _f("credentials", "Secrets en certificaten", "table", long=True, rmm="credentials", icon="key",
+               columns=_cols(("kind", "Soort"), ("name", "Omschrijving"), ("expires", "Verloopt op", {"expiry": True}))),
+        ]},
+        {"key": "over", "label": "Over", "fields": [
+            _f("notes", "Notities", "textarea"),
+        ]},
+    ],
+}
 
 # --------------------------------------------------------------------------- #
 # Software and who it comes from
@@ -534,19 +669,21 @@ LICENSE = {
     "columns": ["product", "seats", "vendor", "expires_at"],
     "groups": [
         {"key": "wat", "label": "Wat", "width": "half", "fields": [
-            _f("product", "Product", icon="package",
+            _f("product", "Product", icon="package", rmm="product",
                hint="Bijvoorbeeld Microsoft 365 Business Premium of AutoCAD LT."),
-            _f("license_type", "Soort", "select",
+            _f("license_type", "Soort", "select", rmm="license_type",
                options=["Abonnement", "Eeuwigdurend", "Volumelicentie", "OEM", "Proef"]),
-            _f("seats", "Aantal", "number", hint="Hoeveel gebruikers of apparaten."),
-            _f("seats_used", "In gebruik", "number"),
+            _f("seats", "Aantal", "number", rmm="seats", hint="Hoeveel gebruikers of apparaten."),
+            _f("seats_used", "In gebruik", "number", rmm="seats_used"),
+            _f("status", "Staat", rmm="status"),
+            _f("tenant", "Microsoft 365-tenant", "ref", ref="m365", rmm="tenant", icon="cloud"),
             _f("vendor", "Gekocht bij", "ref", ref="vendor", icon="box"),
             _f("license_key", "Licentiesleutel", "secret",
                hint="Versleuteld bewaard, zoals een wachtwoord in de kluis."),
         ]},
         {"key": "looptijd", "label": "Looptijd", "width": "half", "fields": [
             _f("purchased_at", "Gekocht op", "date"),
-            _f("expires_at", "Verloopt op", "date", expiry=True,
+            _f("expires_at", "Verloopt op", "date", expiry=True, rmm="expires_at",
                hint="Of verlengt op: dan zie je het aankomen."),
             _f("auto_renew", "Verlengt vanzelf", "bool"),
             _f("order_number", "Order- of contractnummer"),
@@ -685,7 +822,15 @@ SUBTYPES = {
 }
 # (Older names -- Werkplek, Access point -- are renamed at start-up; see database._migrate.)
 
-for _kind, _spec in (("computer", COMPUTER), ("network", NETWORK), ("printer", PRINTER)):
+SUBTYPES.update({
+    "m365user": [("Gebruiker", "Gebruikers", "user"), ("Gast", "Gasten", "user"), ("Geblokkeerd", "Geblokkeerd", "lock")],
+    "m365mailbox": [("Gedeeld", "Gedeeld", "mail"), ("Ruimte", "Ruimtes", "building"), ("Apparatuur", "Apparatuur", "box")],
+    "m365group": [("Team", "Teams", "nodes"), ("Microsoft 365-groep", "Microsoft 365-groepen", "nodes"),
+                  ("Distributielijst", "Distributielijsten", "mail"), ("Beveiligingsgroep", "Beveiligingsgroepen", "shield")],
+})
+
+for _kind, _spec in (("computer", COMPUTER), ("network", NETWORK), ("printer", PRINTER),
+                     ("m365user", M365USER), ("m365mailbox", M365MAILBOX), ("m365group", M365GROUP)):
     _spec["subtypes"] = [{"id": re.sub(r"[^a-z0-9]+", "-", role.lower()).strip("-"), "role": role,
                           "label": role, "plural": plural, "icon": icon}
                          for role, plural, icon in SUBTYPES[_kind]]
@@ -697,6 +842,10 @@ BUILT_IN: dict[str, dict] = {
     "internet": INTERNET,
     "rack": RACK,
     "m365": M365,
+    "m365user": M365USER,
+    "m365mailbox": M365MAILBOX,
+    "m365group": M365GROUP,
+    "m365app": M365APP,
     "subnet": SUBNET,
     "vpn": VPN,
     "application": APPLICATION,
