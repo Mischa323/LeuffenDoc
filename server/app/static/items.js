@@ -726,7 +726,9 @@ window.DocItems = function (ctx) {
       </div>`;
 
     const readBlocks = () => blocksHtml(spec.groups.map((group) => ({ width: group.width, html: (() => {
-      const fields = group.fields.filter((f) => !f.hidden);
+      // A tenant the RMM keeps up has its long lists as pages of their own
+      // (Microsoft 365 in the sidebar); here stays what is typed.
+      const fields = group.fields.filter((f) => !f.hidden && !(item.kind === "m365" && f.type === "table" && held(item, f)));
       // A page of text does not belong in a label-and-value grid; it gets the
       // width of the panel and keeps the line breaks it was written with.
       const long = fields.filter((f) => f.long && display(item, f, all));
@@ -811,6 +813,10 @@ window.DocItems = function (ctx) {
         return;
       }
       const problems = r.problems || [];
+      const parts = ctx.m365Parts ? ctx.m365Parts() : [];
+      const count = (key) => (Array.isArray(r[key]) ? r[key].length : null);
+      const tiles = parts.filter((p) => !p.key || count(p.key) !== null).map((p) => `<button type="button" class="m3-tile" data-part="${p.id}">
+          <b>${p.key ? count(p.key) : "→"}</b><span>${ICON[p.icon] || ""} ${esc(p.label)}</span></button>`).join("");
       slot.innerHTML = `<div class="panel m365-panel">
           <div class="panel-head"><h2>Microsoft 365</h2>
             <span class="sub">${r.ok ? `gelezen door de RMM ${when(r.read_at)}` : `<span class="tag warn">lezen mislukt</span>`}
@@ -822,7 +828,11 @@ window.DocItems = function (ctx) {
               <b>Niet alles kon gelezen worden.</b><ul>${problems.map((p) => `<li>${esc(p.part)}: ${p.error === "forbidden"
                 ? `geen toestemming — geef de app-registratie <code>${esc(p.permission)}</code>` : esc(p.error)}</li>`).join("")}</ul>
               Dat regel je in de app-registratie van de klant; de RMM leest daarna weer.</div></div>` : ""}
+          ${tiles ? `<div class="m3-tiles">${tiles}</div>` : ""}
         </div>`;
+      slot.querySelectorAll("[data-part]").forEach((b) => {
+        b.onclick = () => go(`#/klant/${org.id}/microsoft365?deel=${b.dataset.part}`);
+      });
     }
 
     const draw = async () => {

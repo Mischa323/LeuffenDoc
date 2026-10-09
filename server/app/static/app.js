@@ -81,7 +81,7 @@
       sub: "Lijnen, contracten en storingsnummers", kinds: ["internet"],
       example: "KPN glasvezel hoofdkantoor",
       empty: "Provider, snelheid, vast IP-blok, contract en wie je belt als de lijn eruit ligt." },
-    { id: "microsoft365", group: "cloud", label: "Microsoft 365", icon: "cloud", title: "Microsoft 365",
+    { id: "microsoft365", group: "cloud", parts: true, label: "Microsoft 365", icon: "cloud", title: "Microsoft 365",
       sub: "De tenant: domeinen, abonnementen, gebruikers, mailboxen en groepen", kinds: ["m365"],
       example: "Tenant van de klant",
       empty: "De Microsoft 365-tenant van deze klant. Koppel hem in de RMM (klant → Microsoft 365) en de domeinen, abonnementen, gebruikers met hun licenties, gedeelde mailboxen, groepen en verlopende app-secrets komen hier vanzelf in." },
@@ -142,7 +142,9 @@
     // Which section of a customer lists a kind -- where a copy is made.
     sectionOf: (kind) => ORG.find((t) => (t.kinds || []).includes(kind)),
     // Where a browser reaches the RMM, for "Beheren in de RMM".
-    rmmUrl: () => (state.me && state.me.rmm_url) || null });
+    rmmUrl: () => (state.me && state.me.rmm_url) || null,
+    // Microsoft 365's parts, for the tiles on a tenant's page.
+    m365Parts: () => (typeof M365 !== "undefined" ? M365.PARTS : []) });
 
   /* Types defined here become sections inside a customer, after the built-in
      ones. They are rebuilt rather than reloaded, so making a type and using it
@@ -171,11 +173,15 @@
   // Settings every browser follows; fetched again after they are saved, so
   // the next Genereer already uses the new rules.
   async function reloadConfig() {
-    try { Items.setConfig(await api("/api/config")); } catch (e) { /* defaults apply */ }
+    try {
+      state.config = await api("/api/config");
+      Items.setConfig(state.config);
+    } catch (e) { /* defaults apply */ }
   }
 
   const Settings = window.DocSettings({ api, esc, toast, reloadConfig });
   const Sidebar = window.DocSidebar({ esc, toast });
+  const M365 = window.DocM365({ api, esc, go, index: (orgId) => Items.index(orgId) });
   const Vault = window.DocVault({ api, esc, toast, go: (hash) => go(hash) });
 
   // ---- theme (remembered per browser) ----
@@ -356,7 +362,7 @@
     $("nav-label").textContent = state.org ? "Deze klant" : "Overzicht";
     const tabs = tabsHere();
     const button = (t) => {
-      const subs = state.org && Items.subtypesOf(t.kinds).length;
+      const subs = state.org && (Items.subtypesOf(t.kinds).length || t.parts);
       const shut = folded.has(t.id);
       return `<button data-tab="${t.id}"${t.id === state.tab ? ' class="active"' : ""}>
          ${ICON[t.icon]} ${t.label}${t.id === "klanten" ? `<span class="count">${state.orgs.length}</span>`
@@ -490,8 +496,21 @@
     // Under a section with configuration types: the types this customer has.
     const roles = summary.roles || {};
     const here = new URLSearchParams(location.hash.split("?")[1] || "").get("type");
+    const deel = new URLSearchParams(location.hash.split("?")[1] || "").get("deel");
     $("nav").querySelectorAll("[data-subs]").forEach((slot) => {
       const tab = ORG.find((t) => t.id === slot.dataset.subs);
+      if (tab.parts) {
+        // Microsoft 365's parts, once this customer has a tenant.
+        const parts = summary.m365 || {};
+        slot.innerHTML = (counts.m365 ? M365.PARTS : []).map((p) => `<button class="nav-sub${state.tab === tab.id && deel === p.id ? " active" : ""}"
+            data-part="${p.id}">${ICON[p.icon] || ""} ${esc(p.label)}${p.key ? `<span class="count">${parts[p.key] || 0}</span>` : ""}</button>`).join("");
+        slot.querySelectorAll("button").forEach((b) => {
+          b.onclick = () => go(`#/klant/${orgId}/${tab.id}?deel=${b.dataset.part}`);
+        });
+        const fold = $("nav").querySelector(`[data-fold="${tab.id}"]`);
+        if (fold) fold.classList.toggle("hidden", !slot.children.length);
+        return;
+      }
       slot.innerHTML = Items.subtypesOf(tab.kinds)
         .map((s) => [s, (roles[s.kind] || {})[s.role] || 0]).filter(([, n]) => n)
         .map(([s, n]) => `<button class="nav-sub${state.tab === tab.id && here === s.id ? " active" : ""}"
@@ -842,6 +861,21 @@
         }
         $("page-title").textContent = item.name;
         $("page-sub").textContent = section ? section.title : "";
+        return;
+      }
+
+      // Microsoft 365, a part of it: the users, the licences, the mailboxes …
+      const params = new URLSearchParams(location.hash.split("?")[1] || "");
+      if (tab.parts && params.get("deel")) {
+        $("view").innerHTML = `<div class="panel"><div class="empty">Laden…</div></div>`;
+        const head = await M365.page($("view"), state.org, params.get("deel"), params,
+                                     Number((state.config || {}).EXPIRY_WARN_DAYS) || 60);
+        $("page-title").textContent = head.title;
+        $("page-sub").textContent = head.sub;
+        if (head.tenant) {
+          $("page-actions").innerHTML = `<button class="btn ghost sm" id="to-tenant">${ICON.cloud} Naar de tenant</button>`;
+          $("to-tenant").onclick = () => go(`#/klant/${state.org.id}/item/${head.tenant.id}`);
+        }
         return;
       }
 

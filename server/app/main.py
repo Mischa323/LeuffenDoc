@@ -594,6 +594,7 @@ def org_summary(org_id: str, user: dict = Depends(auth.current_user)):
     hidden = _hidden(user)
     counts: dict = {}
     roles: dict = {}          # per kind, per configuration type
+    m365: dict = {}           # the parts of the Microsoft 365 tenants, for the sidebar
     for item in database.list_items(org_id):
         if item["id"] not in hidden:
             counts[item["kind"]] = counts.get(item["kind"], 0) + 1
@@ -601,7 +602,13 @@ def org_summary(org_id: str, user: dict = Depends(auth.current_user)):
             if role and item["kind"] in schema.SUBTYPES:
                 per = roles.setdefault(item["kind"], {})
                 per[role] = per.get(role, 0) + 1
-    return {"org": org, "counts": counts, "roles": roles}
+            if item["kind"] == "m365":
+                held = schema.rmm_held(item)
+                for key, field in schema.fields_of("m365").items():
+                    value = schema.value_of(item, field, held)
+                    if field["type"] == "table" and isinstance(value, list):
+                        m365[key] = m365.get(key, 0) + len(value)
+    return {"org": org, "counts": counts, "roles": roles, "m365": m365}
 
 
 @app.post("/api/orgs/{org_id}/items")

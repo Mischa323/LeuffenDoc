@@ -3,6 +3,16 @@
 ## [Unreleased]
 
 ### Added
+- **Microsoft 365 in parts.** Under **Microsoft 365** in the sidebar, each part has a page of its own, with a count beside it:
+  - **Gebruikers**: filter on who can sign in, who is blocked, guests, and who has no licence.
+  - **Licenties**: what is free and when each subscription renews; *"12 gebruikers →"* opens the users who have it.
+  - **Mailboxen**: shared mailboxes, rooms and equipment, with who may reach each.
+  - **Groepen & Teams**: by kind — Teams, Microsoft 365 groups, distribution lists, security groups — with their members, a long list folded.
+  - **SharePoint**: the sites, each a link.
+  - **App-registraties**: by expiry date, with a filter for what runs out soon.
+  - **Beveiliging**: security defaults, how MFA is arranged, the break-glass account and the Conditional Access policies.
+
+  Each page has a search that also looks in members and licences. A tenant's own page becomes an overview: what is typed, how the RMM's last reading went, and a tile per part. With more than one tenant at a customer, the pages show them together with a column saying which.
 - **The sidebar laid out by an administrator, and by everyone for themselves.**
   - **Instellingen → Zijbalk** sets how the sidebar inside a customer looks for everyone: rename groups, add and remove them, move them up and down, drag sections from one group to another or into a different order, and hide what nobody uses. A group without a name has no heading. **Terug naar wat LeuffenDoc meebrengt** undoes it.
   - **Zijbalk aanpassen**, at the bottom of the sidebar, does the same for yourself only, on top of the administrator's default. **Terug naar de standaard** drops your own layout again.
