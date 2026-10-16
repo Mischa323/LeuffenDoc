@@ -165,19 +165,142 @@ window.DocSettings = function (ctx) {
   };
   let section = "algemeen";
 
+  /* The vault's key: where it is, a copy to keep elsewhere, and a new one.
+     A new key puts everything under it -- nothing becomes unreadable -- and a
+     snapshot is taken first. */
+  const savedWhen = (s) => new Date(s.at * 1000).toLocaleString("nl-NL", { dateStyle: "medium", timeStyle: "short" });
+
+  function vaultStatus(v) {
+    if (v.from_environment) {
+      return `<div class="callout info"><div class="ic">${ICON.lock}</div><div>
+           <div class="ct">De sleutel komt uit de omgeving</div>
+           <div class="cd">Via <code>DOC_SECRET_KEY</code>, dus niet in de database. Een back-up van het datavolume bevat de kluis, maar niet de sleutel om hem te openen. Vervangen doe je daar.
+             ${v.copy_in_database ? (v.copy_matches
+               ? "<br>Er staat nog een kopie van dezelfde sleutel in de database, van voordat hij in de omgeving stond. Die is niet meer nodig."
+               : "<br>In de database staat een <b>andere</b> sleutel dan in de omgeving. Die blijft staan.") : ""}</div></div></div>`;
+    }
+    if (v.saved) {
+      return `<div class="callout info"><div class="ic">${ICON.lock}</div><div>
+           <div class="ct">De sleutel staat in de database, en is elders bewaard</div>
+           <div class="cd">Bewaard door ${esc(v.saved.by)} op ${esc(savedWhen(v.saved))}. Raakt de server kwijt, dan gaat de kluis uit een back-up weer open met die sleutel.
+             Een back-up van het datavolume bevat de sleutel ook; wil je dat niet, zet hem dan als <code>DOC_SECRET_KEY</code> bij de container.</div></div></div>`;
+    }
+    return `<div class="callout warn"><div class="ic">${ICON.alert}</div><div>
+         <div class="ct">De sleutel staat alleen in de database</div>
+         <div class="cd">Bewaar een kopie ergens anders, in je wachtwoordmanager: zonder sleutel gaat de kluis uit een back-up niet meer open.
+           Een back-up van het datavolume bevat de sleutel ook; wil je dat niet, zet hem dan als <code>DOC_SECRET_KEY</code> bij de container.</div></div></div>`;
+  }
+
   function vaultBlock() {
     const v = data.vault;
-    const where = v.from_environment
-      ? `<div class="callout info"><div class="ic">${ICON.lock}</div><div>
-           <div class="ct">De sleutel komt uit de omgeving</div>
-           <div class="cd">Via <code>DOC_SECRET_KEY</code>, dus niet in de database. Een back-up van het datavolume bevat de kluis, maar niet de sleutel om hem te openen.</div></div></div>`
-      : `<div class="callout warn"><div class="ic">${ICON.alert}</div><div>
-           <div class="ct">De sleutel staat in de database</div>
-           <div class="cd">Een back-up van het datavolume bevat dan zowel de kluis als de sleutel. Zet <code>DOC_SECRET_KEY</code> in de omgeving — vóórdat de kluis gevuld wordt, want met een andere sleutel gaan bestaande wachtwoorden niet meer open.</div></div></div>`;
+    const actions = v.from_environment
+      ? (v.copy_in_database && v.copy_matches
+        ? `<button class="btn ghost sm" id="vk-forget">${ICON.trash} Kopie uit de database verwijderen</button>` : "")
+      : `<button class="btn ghost sm" id="vk-show">${ICON.eye || ICON.lock} Sleutel tonen</button>
+         <button class="btn ghost sm" id="vk-new">${ICON.restart || ICON.refresh || ""} Nieuwe sleutel…</button>`;
     return `<div class="panel form-block" id="blk-kluis">
         <div class="panel-head"><h2>Kluis</h2>
-          <span class="sub">Niet te wijzigen vanaf deze pagina — een andere sleutel maakt alles onleesbaar</span></div>
-        <div class="form-body" style="padding-bottom:16px">${where}</div></div>`;
+          <span class="sub">De sleutel waarmee alle wachtwoorden versleuteld zijn</span></div>
+        <div class="form-body" style="padding-bottom:16px">
+          <div id="vk-status">${vaultStatus(v)}</div>
+          <div id="vk-out"></div>
+          ${actions ? `<div class="vk-actions">${actions}</div>` : ""}
+        </div></div>`;
+  }
+
+  function showKey(host, key, fresh) {
+    const out = host.querySelector("#vk-out");
+    out.innerHTML = `<div class="vk-key">
+        <div class="vk-title">${fresh ? "Dit is de nieuwe sleutel — bewaar hem nu" : "De sleutel van de kluis"}</div>
+        <code class="vk-value" id="vk-value">${esc(key)}</code>
+        <div class="vk-row">
+          <button class="btn ghost sm" id="vk-copy">${ICON.copy || ""} Kopiëren</button>
+          <button class="btn ghost sm" id="vk-download">${ICON.download} Downloaden</button>
+          <div style="flex:1"></div>
+          <button class="btn sm" id="vk-saved">${ICON.check || ""} Ik heb hem elders bewaard</button>
+        </div>
+        <div class="hint">Wie deze sleutel en een back-up heeft, kan alle wachtwoorden lezen. Bewaar hem dus niet naast de back-ups.</div>
+      </div>`;
+    out.querySelector("#vk-copy").onclick = async () => {
+      try { await navigator.clipboard.writeText(key); toast("Gekopieerd"); }
+      catch (e) { toast("Kopiëren lukt hier niet — selecteer de sleutel en kopieer hem zelf"); }
+    };
+    out.querySelector("#vk-download").onclick = () => {
+      const blob = new Blob([`LeuffenDoc — sleutel van de kluis\n${location.host}\n\n${key}\n`], { type: "text/plain" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `leuffendoc-kluissleutel-${location.hostname}.txt`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    };
+    out.querySelector("#vk-saved").onclick = async () => {
+      try {
+        data.vault = await api("/api/admin/vault/key/saved", { method: "POST" });
+        host.querySelector("#vk-status").innerHTML = vaultStatus(data.vault);
+        out.innerHTML = "";
+        toast("Genoteerd: de sleutel is elders bewaard");
+      } catch (e) { toast(e.message); }
+    };
+  }
+
+  function newKeyForm(host) {
+    const out = host.querySelector("#vk-out");
+    out.innerHTML = `<div class="vk-key">
+        <div class="vk-title">Een nieuwe sleutel</div>
+        <div class="cd" style="margin-bottom:10px">Alle wachtwoorden, deellinks en geheime instellingen worden met de nieuwe sleutel opnieuw versleuteld — er gaat niets verloren.
+          Eerst wordt er een back-up gemaakt (<i>Vóór nieuwe sleutel</i>), dus dit is altijd terug te zetten. De oude sleutel werkt daarna niet meer.</div>
+        <label class="vk-choice"><input type="radio" name="vk-kind" value="make" checked> Laat LeuffenDoc een sterke sleutel maken</label>
+        <label class="vk-choice"><input type="radio" name="vk-kind" value="own"> Een eigen sleutel of wachtwoordzin</label>
+        <input class="inp mono hidden" id="vk-own" type="text" autocomplete="off" spellcheck="false"
+               placeholder="Minstens 16 tekens" style="margin:8px 0 2px" />
+        <div class="vk-row">
+          <button class="btn ghost sm" id="vk-cancel">Annuleren</button>
+          <div style="flex:1"></div>
+          <button class="btn sm" id="vk-go">Sleutel vervangen</button>
+        </div>
+      </div>`;
+    const own = out.querySelector("#vk-own");
+    out.querySelectorAll("input[name='vk-kind']").forEach((r) => {
+      r.onchange = () => { own.classList.toggle("hidden", r.value !== "own" || !r.checked); if (r.value === "own" && r.checked) own.focus(); };
+    });
+    out.querySelector("#vk-cancel").onclick = () => { out.innerHTML = ""; };
+    out.querySelector("#vk-go").onclick = async (ev) => {
+      const button = ev.currentTarget;
+      const mine = out.querySelector("input[name='vk-kind']:checked").value === "own";
+      const key = mine ? own.value.trim() : "";
+      if (mine && key.length < 16) { toast("Kies een sleutel of wachtwoordzin van minstens 16 tekens"); own.focus(); return; }
+      if (!confirm("De kluis onder een nieuwe sleutel zetten? Bewaar de nieuwe sleutel daarna meteen elders.")) return;
+      button.disabled = true;
+      try {
+        const r = await api("/api/admin/vault/key", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key }),
+        });
+        data.vault = r.state;
+        host.querySelector("#vk-status").innerHTML = vaultStatus(data.vault);
+        showKey(host, r.key, true);
+        toast(`Nieuwe sleutel: ${r.counts.passwords} wachtwoorden opnieuw versleuteld`);
+        drawBackups(host);
+      } catch (e) { toast(e.message); button.disabled = false; }
+    };
+  }
+
+  function wireVault(host) {
+    const show = host.querySelector("#vk-show");
+    if (show) show.onclick = async () => {
+      try { showKey(host, (await api("/api/admin/vault/key/reveal", { method: "POST" })).key, false); }
+      catch (e) { toast(e.message); }
+    };
+    const fresh = host.querySelector("#vk-new");
+    if (fresh) fresh.onclick = () => newKeyForm(host);
+    const forget = host.querySelector("#vk-forget");
+    if (forget) forget.onclick = async () => {
+      if (!confirm("De kopie van de sleutel uit de database verwijderen? De sleutel in DOC_SECRET_KEY blijft gelden.")) return;
+      try {
+        data.vault = await api("/api/admin/vault/key/copy", { method: "DELETE" });
+        paint(host);
+        toast("De kopie is uit de database");
+      } catch (e) { toast(e.message); }
+    };
   }
 
   /* Back-ups: snapshots in the data volume, one to take away (always
@@ -621,6 +744,7 @@ window.DocSettings = function (ctx) {
       button.disabled = false;
     };
     wireBackupButtons(host);
+    wireVault(host);
     host.querySelector("#pair-go").onclick = async (ev) => {
       const button = ev.currentTarget;
       button.disabled = true;

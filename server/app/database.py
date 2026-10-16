@@ -854,6 +854,147 @@ def delete_item(item_id: str) -> None:
         conn.execute("DELETE FROM items WHERE id=?", (item_id,))
 
 
+def keep_reported(item_id: str, values: dict) -> None:
+    """No longer kept in step from elsewhere: what was reported becomes typed
+    (``values``, by field), so nothing disappears from the page."""
+    with write() as conn:
+        r = conn.execute("SELECT fields_json FROM items WHERE id=?", (item_id,)).fetchone()
+        if not r:
+            return
+        fields = json.loads(r["fields_json"] or "{}")
+        for key, value in values.items():
+            if value not in (None, "", []) and fields.get(key) in (None, "", []):
+                fields[key] = value
+        conn.execute("UPDATE items SET source='manual', rmm_device_id=NULL, rmm_json=NULL, rmm_gone=0, "
+                     "fields_json=? WHERE id=?", (json.dumps(fields), item_id))
+
+
+def move_items(item_ids: list, to_org: str, refs: dict, by: str | None) -> dict:
+    """Things to another customer, with what is theirs: passwords, files,
+    notes, history. What tied them to what stays behind is cut -- nothing
+    points across customers -- and said in their history: references both
+    ways, links, the switch port a cable was in, a place in a cabinet.
+
+    ``refs`` is, per kind, the reference fields as (key, label). Returns per
+    item what was cut, in words. One transaction: all of it, or none."""
+    moving = list(dict.fromkeys(item_ids))
+    if not moving:
+        return {}
+    mset = set(moving)
+    marks = ",".join("?" * len(moving))
+    now = time.time()
+    cut: dict = {i: [] for i in moving}
+    with write() as conn:
+        items = {r["id"]: dict(r) for r in conn.execute(f"SELECT * FROM items WHERE id IN ({marks})", moving)}
+        names = {i: r["name"] for i, r in items.items()}
+
+        def name_of(item_id):
+            if item_id in names:
+                return names[item_id]
+            r = conn.execute("SELECT name FROM items WHERE id=?", (item_id,)).fetchone()
+            return r["name"] if r else "iets dat er niet meer is"
+
+        def org_name(org_id):
+            r = conn.execute("SELECT name FROM organizations WHERE id=?", (org_id,)).fetchone()
+            return r["name"] if r else org_id
+
+        to_name = org_name(to_org)
+        # References from what moves to what stays ...
+        for i, r in items.items():
+            fields = json.loads(r["fields_json"] or "{}")
+            dropped = False
+            for key, label in refs.get(r["kind"], []):
+                target = fields.get(key)
+                if target and target not in mset:
+                    cut[i].append(f"{label}: {name_of(target)}")
+                    fields.pop(key)
+                    dropped = True
+            if dropped:
+                conn.execute("UPDATE items SET fields_json=? WHERE id=?", (json.dumps(fields), i))
+        # ... and from what stays to what moves.
+        for org_id in {r["org_id"] for r in items.values()}:
+            for r in conn.execute("SELECT id, kind, fields_json FROM items WHERE org_id=?", (org_id,)).fetchall():
+                if r["id"] in mset:
+                    continue
+                fields = json.loads(r["fields_json"] or "{}")
+                said = []
+                for key, label in refs.get(r["kind"], []):
+                    if fields.get(key) in mset:
+                        said.append(f"{label}: {names[fields[key]]} is verplaatst naar {to_name}")
+                        fields.pop(key)
+                if said:
+                    conn.execute("UPDATE items SET fields_json=?, updated_at=? WHERE id=?",
+                                 (json.dumps(fields), now, r["id"]))
+                    conn.execute("INSERT INTO revisions (item_id, at, user_email, source, action, changes_json) "
+                                 "VALUES (?, ?, ?, 'manual', 'updated', ?)",
+                                 (r["id"], now, by, json.dumps([{"key": "moved", "label": "Verwijzing weg",
+                                                                 "said": "; ".join(said)}])))
+        # Links to what stays.
+        for r in conn.execute(f"SELECT id, a_id, b_id FROM relations WHERE a_id IN ({marks}) OR b_id IN ({marks})",
+                              moving + moving).fetchall():
+            a_in, b_in = r["a_id"] in mset, r["b_id"] in mset
+            if a_in and b_in:
+                continue
+            mine, other = (r["a_id"], r["b_id"]) if a_in else (r["b_id"], r["a_id"])
+            cut[mine].append(f"Gekoppeld aan {name_of(other)}")
+            conn.execute("DELETE FROM relations WHERE id=?", (r["id"],))
+        # Cables: a moving machine in a switch that stays, a moving switch with what stays in it.
+        for r in conn.execute(f"SELECT p.id, p.number, a.item_id, s.name AS switch_name FROM switch_ports p "
+                              f"JOIN adapters a ON a.id = p.adapter_id JOIN items s ON s.id = p.switch_id "
+                              f"WHERE a.item_id IN ({marks}) AND p.switch_id NOT IN ({marks})",
+                              moving + moving).fetchall():
+            cut[r["item_id"]].append(f"Aangesloten op {r['switch_name']} poort {r['number']}")
+            conn.execute("UPDATE switch_ports SET adapter_id=NULL, updated_at=?, updated_by=? WHERE id=?",
+                         (now, by, r["id"]))
+        for r in conn.execute(f"SELECT p.id, p.number, p.switch_id, i.name AS item_name FROM switch_ports p "
+                              f"JOIN adapters a ON a.id = p.adapter_id JOIN items i ON i.id = a.item_id "
+                              f"WHERE p.switch_id IN ({marks}) AND a.item_id NOT IN ({marks})",
+                              moving + moving).fetchall():
+            cut[r["switch_id"]].append(f"Poort {r['number']}: {r['item_name']}")
+            conn.execute("UPDATE switch_ports SET adapter_id=NULL, updated_at=?, updated_by=? WHERE id=?",
+                         (now, by, r["id"]))
+        # Cabinets: what moves leaves the cabinet it was in; a moving cabinet leaves behind what stays.
+        for r in conn.execute("SELECT l.rack_id, l.slots_json, i.name FROM rack_layouts l "
+                              "JOIN items i ON i.id = l.rack_id").fetchall():
+            rack_moving = r["rack_id"] in mset
+            slots, kept, changed = json.loads(r["slots_json"] or "[]"), [], False
+            for slot in slots:
+                thing = slot.get("item")
+                if thing and (thing in mset) != rack_moving:
+                    changed = True
+                    if thing in mset:
+                        cut[thing].append(f"In patchkast {r['name']}")
+                    else:
+                        cut[r["rack_id"]].append(f"{name_of(thing)} bleef achter")
+                    continue
+                if slot.get("items"):
+                    standing = []
+                    for t in slot["items"]:
+                        ti = t.get("item")
+                        if ti and (ti in mset) != rack_moving:
+                            changed = True
+                            if ti in mset:
+                                cut[ti].append(f"In patchkast {r['name']}")
+                            else:
+                                cut[r["rack_id"]].append(f"{name_of(ti)} bleef achter")
+                            continue
+                        standing.append(t)
+                    slot = {**slot, "items": standing}
+                kept.append(slot)
+            if changed:
+                conn.execute("UPDATE rack_layouts SET slots_json=?, updated_at=?, updated_by=? WHERE rack_id=?",
+                             (json.dumps(kept), now, by, r["rack_id"]))
+        # And then the move itself, in each one's history.
+        for i, r in items.items():
+            conn.execute("UPDATE items SET org_id=?, updated_at=?, updated_by=? WHERE id=?", (to_org, now, by, i))
+            changes = [{"key": "org", "label": "Klant", "from": org_name(r["org_id"]), "to": to_name}]
+            if cut[i]:
+                changes.append({"key": "moved", "label": "Losgemaakt", "said": "; ".join(cut[i])})
+            conn.execute("INSERT INTO revisions (item_id, at, user_email, source, action, changes_json) "
+                         "VALUES (?, ?, ?, 'manual', 'updated', ?)", (i, now, by, json.dumps(changes)))
+    return cut
+
+
 def list_revisions(item_id: str, limit: int = 200) -> list:
     out = []
     for r in rows("SELECT * FROM revisions WHERE item_id=? ORDER BY at DESC, id DESC LIMIT ?",

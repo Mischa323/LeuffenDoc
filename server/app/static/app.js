@@ -156,7 +156,9 @@
     // Where a browser reaches the RMM, for "Beheren in de RMM".
     rmmUrl: () => (state.me && state.me.rmm_url) || null,
     // Who is signed in: whose notes may be changed.
-    me: () => state.me });
+    me: () => state.me,
+    // The page drawn again, with the sidebar's counts -- after several things changed at once.
+    reload: () => route() });
 
   /* Types defined here become sections inside a customer, after the built-in
      ones. They are rebuilt rather than reloaded, so making a type and using it
@@ -672,7 +674,7 @@
           <div class="due-row" data-item="${esc(d.item.id)}">
             <span class="due-name">${esc(d.item.name)}</span>
             <span class="muted">${esc(d.field.label.toLowerCase())}</span>
-            <span class="tag warn">${esc(d.flag.text)}</span>
+            <span class="tag ${esc(d.flag.kind)}">${esc(d.flag.text)}</span>
             <span class="muted">${new Date(d.on).toLocaleDateString("nl-NL")}</span>
           </div>`).join("")}</div>
           ${due.length > 8 ? `<div class="muted" style="margin-top:8px">en nog ${due.length - 8}</div>` : ""}
@@ -1100,17 +1102,17 @@
   async function showVaultKey() {
     let state_;
     try { state_ = await api("/api/vault"); } catch (e) { return; }
-    if (state_.from_environment || !state_.in_database) return;
+    if (state_.from_environment || !state_.in_database || state_.saved) return;
+    if (!(state.me && state.me.is_admin)) return;          // only an administrator can do something about it
     const note = document.createElement("div");
-    note.className = "callout warn";
+    note.className = "callout warn vault-key-note";
     note.style.marginBottom = "16px";
-    note.innerHTML = `<div class="ic">${ICON.lock}</div><div>
-      <div class="ct">De sleutel van de kluis staat in de database</div>
-      <div class="cd">Er is er een aangemaakt omdat <code>DOC_SECRET_KEY</code> niet is ingesteld.
-        Dat werkt, maar een back-up van het datavolume bevat dan zowel de kluis als de sleutel.
-        Zet <code>DOC_SECRET_KEY</code> en bewaar hem elders — dat moet gebeuren
-        <b>voordat</b> je de kluis gaat vullen, want met een andere sleutel gaan bestaande
-        wachtwoorden niet meer open.</div></div>`;
+    note.innerHTML = `<div class="ic">${ICON.lock}</div><div style="flex:1">
+      <div class="ct">De sleutel van de kluis is nog nergens anders bewaard</div>
+      <div class="cd">Hij staat alleen in de database. Bewaar een kopie in je wachtwoordmanager — zonder
+        sleutel gaat de kluis uit een back-up niet meer open. Tonen, bewaren of vervangen doe je onder
+        <b>Instellingen → Wachtwoorden</b>.</div></div>
+      <div><a class="btn ghost sm" href="#/instellingen/wachtwoorden">Naar de sleutel</a></div>`;
     $("view").prepend(note);
   }
 

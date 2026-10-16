@@ -464,6 +464,18 @@
     table.grid.ports tbody tr { cursor: default; }
     table.grid.ports tbody tr.free td { color: var(--text-faint); }
     table.grid.ports .pnum { font-weight: 700; width: 90px; }
+    table.grid th.sel, table.grid td.sel { width: 38px; padding-right: 0; cursor: default; }
+    table.grid td.sel input, table.grid th.sel input { width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent); }
+    table.grid tbody tr.selected td { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+    .bulk-bar { position: sticky; top: 8px; z-index: 5; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+                margin-bottom: 10px; padding: 9px 12px; border-radius: var(--r-md, 10px);
+                border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+                background: color-mix(in srgb, var(--accent) 10%, var(--surface)); box-shadow: 0 6px 18px rgba(0,0,0,.18); }
+    .bulk-bar .bulk-n { font-weight: 650; margin-right: 6px; }
+    .bulk-bar .spacer { flex: 1; }
+    .move-panel { margin-bottom: 14px; }
+    .move-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+    .move-row select { min-width: 260px; flex: 0 1 360px; }
     table.grid.ports .pst { white-space: nowrap; }
     table.grid.ports .pst .tag { margin-left: 4px; }
     .pstate { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px;
@@ -781,6 +793,14 @@
 
     /* ---- the vault across customers ---- */
     .tag.bad { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
+    .tag.info { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent);
+                border-color: transparent; }
+    .tag.off { color: var(--text-faint); }
+    .ldot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px;
+            vertical-align: 1px; background: var(--text-faint); flex: none; }
+    .ldot.ok { background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 20%, transparent); }
+    .ldot.bad { background: var(--bad); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 18%, transparent); }
+    .ldot.off { background: var(--text-faint); opacity: .7; }
     .vault-sum { padding: 16px 20px; margin-bottom: 16px; }
     .vs-line { display: flex; gap: 8px; align-items: baseline; font-size: 14px; }
     .vault-grades { display: flex; height: 8px; border-radius: 99px; overflow: hidden;

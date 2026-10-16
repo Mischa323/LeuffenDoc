@@ -93,11 +93,15 @@ window.DocItems = function (ctx) {
      quietly disagree with the machine -- but only for something that comes from
      the RMM, and only what the RMM says it holds for it (a UniFi switch has no
      serial number there). A switch typed in by hand has a model like any other
-     field. The server decides the same way (schema.rmm_held). */
+     field. The server decides the same way (schema.rmm_held): without a list
+     of what it holds, the RMM holds what the kind marks as the RMM's -- for a
+     machine its hardware, never its type, which is typed here. */
   function held(item, field) {
     if (!field.rmm || !item || !SYNCED[item.source] || !item.rmm_device_id) return false;
     const holds = (item.rmm || {}).holds;
-    return Array.isArray(holds) ? holds.includes(field.rmm) : true;
+    if (Array.isArray(holds)) return holds.includes(field.rmm);
+    const spec = KINDS && KINDS[item.kind];
+    return !!spec && spec.groups.some((g) => (g.fields || []).some((f) => f.rmm === field.rmm));
   }
 
   // Where a held value comes from -- the RMM, or Microsoft 365 -- as a tag says it.
@@ -152,7 +156,9 @@ window.DocItems = function (ctx) {
       if (c.link && /^https?:\/\//i.test(v)) return `<a href="${esc(v)}" target="_blank" rel="noopener">${esc(v)}</a>`;
       const flag = c.expiry ? expiry({ expiry: true }, v) : null;
       const shown = c.expiry && /^\d{4}-\d{2}-\d{2}$/.test(v) ? new Date(v).toLocaleDateString("nl-NL") : v;
-      return esc(shown) + (flag ? ` <span class="tag ${flag.kind}">${esc(flag.text)}</span>` : "");
+      const tone = toneOf(c, v);
+      return (tone ? `<span class="tag ${tone}">${esc(shown)}</span>` : esc(shown))
+        + (flag ? ` <span class="tag ${flag.kind}">${esc(flag.text)}</span>` : "");
     };
     const technical = (v) => /^[\d.:/\-, *]+$/.test(String(v || "").trim());
     return `<div class="tview${rows.length > LONG_TABLE ? " folded" : ""}" data-table="${esc(field.key)}">
@@ -184,6 +190,8 @@ window.DocItems = function (ctx) {
   /* A date that has run out, or is about to. Sixty days is roughly the notice
      you need to do something about it: order a replacement, or ring the
      provider before the contract renews itself. */
+  /* A date that runs out, at a glance: red once it has, yellow while it is
+     close, green while there is time -- and how much. */
   function expiry(field, value) {
     if (!field.expiry || !value) return null;
     const parts = String(value).split("-").map(Number);
@@ -192,18 +200,61 @@ window.DocItems = function (ctx) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const days = Math.round((on - today) / 86400000);
-    if (days < 0) return { kind: "warn", text: "verlopen" };
+    if (days < 0) return { kind: "bad", text: "verlopen" };
     if (days <= (Number(CONFIG.EXPIRY_WARN_DAYS) || 60)) return { kind: "warn", text: days === 0 ? "vandaag" : `nog ${days} ${days === 1 ? "dag" : "dagen"}` };
-    return null;
+    const months = Math.round(days / 30.44);
+    return { kind: "ok", text: months >= 24 ? `nog ${Math.floor(months / 12)} jaar` : `nog ${months} maanden` };
   }
+
+  // How a value reads: green, yellow, red or blue, where the field says so.
+  function toneOf(spec, value) {
+    const tones = spec && spec.tones;
+    if (!tones || typeof value !== "string" || !value) return "";
+    if (tones[value] !== undefined) return tones[value];
+    return tones[value.split(/[\s—,]+/)[0]] || "";
+  }
+
+  // An account that has not signed in for a long time: worth a look.
+  function stale(field, value) {
+    if (!field.stale || !value) return null;
+    const m = String(value).match(/^(\d{1,2})-(\d{1,2})-(\d{4})/) || null;
+    const iso = m ? null : String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    const on = m ? new Date(+m[3], +m[2] - 1, +m[1]) : iso ? new Date(+iso[1], +iso[2] - 1, +iso[3]) : null;
+    if (!on || isNaN(on)) return null;
+    const days = Math.floor((Date.now() - on) / 86400000);
+    return days >= field.stale ? { kind: "warn", text: `${days} dagen geleden` } : null;
+  }
+
+  /* Whether a machine or a piece of network equipment the RMM watches is on
+     right now: green when it is; when it is not, red for what should always
+     be on (servers, network equipment), grey for what is switched off at night. */
+  const ALWAYS_ON = ["Server", "NAS", "Virtuele machine", "Router", "Switch", "Firewall", "Wifi-punt", "Modem", "NVR", "Camera"];
+  function liveState(item) {
+    const r = item.rmm || {};
+    if (item.source !== "rmm" || item.rmm_gone) return null;
+    let on = null;
+    if (typeof r.online === "boolean") on = r.online;
+    else if (r.state === "online") on = true;
+    else if (r.state === "offline") on = false;
+    if (on === null) return null;
+    if (on) return { kind: "ok", text: "online" };
+    return { kind: ALWAYS_ON.includes(roleIn(item)) ? "bad" : "off", text: "offline" };
+  }
+  const liveDot = (item) => {
+    const s = liveState(item);
+    return s ? `<span class="ldot ${s.kind}" title="${s.text}"></span>` : "";
+  };
 
   // A value as it appears in a table cell or on a page: the text, plus the
   // warning that makes a date worth having in the first place.
   function cell(item, field, all) {
     const text = display(item, field, all);
     if (!text) return "";
-    const flag = expiry(field, valueOf(item, field));
-    return esc(text) + (flag ? ` <span class="tag ${flag.kind}">${esc(flag.text)}</span>` : "");
+    const raw = valueOf(item, field);
+    const flag = expiry(field, raw) || stale(field, raw);
+    const tone = toneOf(field, raw);
+    return (tone ? `<span class="tag ${tone}">${esc(text)}</span>` : esc(text))
+      + (flag ? ` <span class="tag ${flag.kind}">${esc(flag.text)}</span>` : "");
   }
 
   function inputFor(field, value, all, orgId, from) {
@@ -433,6 +484,65 @@ window.DocItems = function (ctx) {
              : `${ICON[KINDS[item.kind].icon]} ${esc(KINDS[item.kind].label)}`;
   }
 
+  /* Several things at once -- archived, put back, moved or deleted -- in one
+     call. What could not be done says why, by name; the rest went ahead. */
+  const kept = (i) => SYNCED[i.source] && i.rmm_device_id && !i.rmm_gone;
+  const fromWhere = (i) => (i.source === "m365" ? "Microsoft 365" : "de RMM");
+
+  let lastFailed = null;          // what a bulk action could not do, for the list drawn after it
+
+  async function bulk(org, action, ids, extra = {}) {
+    const r = await api(`/api/orgs/${org.id}/items/bulk`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ids, ...extra }),
+    });
+    forget(org.id);
+    if (r.to) forget(r.to.id);
+    const verb = { archive: "gearchiveerd", restore: "teruggezet", delete: "verwijderd",
+                   move: `verplaatst naar ${r.to ? r.to.name : ""}` }[action];
+    if (r.done) toast(`${r.done} ${r.done === 1 ? "item" : "items"} ${verb}${r.failed.length ? ` — ${r.failed.length} niet` : ""}`);
+    else if (r.failed.length) toast(r.failed[0].reason);
+    return r;
+  }
+
+  function failedHtml(failed) {
+    if (!failed || !failed.length) return "";
+    return `<div class="callout warn bulk-failed" style="margin-bottom:14px"><div class="ic">${ICON.alert}</div>
+      <div><div class="ct">${failed.length === 1 ? "Eén ging niet" : `${failed.length} gingen niet`}</div>
+      <div class="cd">${failed.map((f) => `<div><b>${esc(f.name || "?")}</b> — ${esc(f.reason)}</div>`).join("")}</div></div></div>`;
+  }
+
+  /* Moving to another customer: which one, and what that cuts loose. */
+  async function movePanel(slot, org, count, onMove) {
+    let orgs = [];
+    try { orgs = await api("/api/orgs"); } catch (e) { toast(e.message); return; }
+    const targets = orgs.filter((o) => o.id !== org.id && (!o.may || o.may.edit))
+      .sort((a, b) => a.name.localeCompare(b.name, "nl"));
+    slot.innerHTML = `<div class="panel move-panel">
+        <div class="panel-head"><h2>${count === 1 ? "Verplaatsen" : `${count} items verplaatsen`} naar een andere klant</h2></div>
+        <div class="form-body">
+          ${targets.length ? `<div class="move-row">
+            <select class="inp" id="move-to"><option value="">— kies een klant —</option>
+              ${targets.map((o) => `<option value="${esc(o.id)}">${esc(o.name)}</option>`).join("")}</select>
+            <button class="btn sm" id="move-go">Verplaatsen</button>
+            <button class="btn ghost sm" id="move-cancel">Annuleren</button></div>
+          <div class="hint">Mee gaan: wachtwoorden, bestanden, notities en de geschiedenis. Los gaan, omdat niets
+            naar een andere klant wijst: verwijzingen naar en koppelingen met wat hier blijft, de aansluiting op een
+            switch hier, en een plek in een patchkast hier — de geschiedenis zegt wat. Wat de RMM bijhoudt,
+            verplaats je in de RMM.</div>`
+          : `<div class="muted">Er is geen andere klant waar je iets mag wijzigen.</div>
+             <div class="move-row" style="margin-top:10px"><button class="btn ghost sm" id="move-cancel">Sluiten</button></div>`}
+        </div></div>`;
+    slot.querySelector("#move-cancel").onclick = () => { slot.innerHTML = ""; };
+    const goBtn = slot.querySelector("#move-go");
+    if (goBtn) goBtn.onclick = async () => {
+      const to = slot.querySelector("#move-to").value;
+      if (!to) { toast("Kies eerst de klant"); return; }
+      goBtn.disabled = true;
+      try { await onMove(to); } catch (e) { toast(e.message); goBtn.disabled = false; }
+    };
+  }
+
   async function listView(host, org, section) {
     await kinds();
     const all = await index(org.id, true);
@@ -524,13 +634,29 @@ window.DocItems = function (ctx) {
       const field = fieldsOf(item.kind).find((f) => f.key === key);
       return field ? cell(item, field, all) : "";
     };
-    const table = items.length ? `<div class="panel"><table class="grid"><thead><tr>
+    // Selecting several, to do something to all of them: who may change things here.
+    const mayEdit = !org.may || org.may.edit;
+    const admin = !!((ctx.me && ctx.me()) || {}).is_admin;
+    const selCell = (i) => (mayEdit ? `<td class="sel"><input type="checkbox" data-sel="${esc(i.id)}"
+        aria-label="${esc(i.name)} selecteren" /></td>` : "");
+    const bulkBar = mayEdit && items.length ? `<div class="bulk-bar hidden" id="bulk-bar">
+        <span class="bulk-n" id="bulk-n"></span>
+        ${inArchive ? `<button class="btn ghost sm" data-bulk="restore">${ICON.refresh} Terugzetten</button>`
+                    : `<button class="btn ghost sm" data-bulk="archive">${ICON.box} Archiveren</button>`}
+        <button class="btn ghost sm" data-bulk="move">${ICON.external || ICON.link} Verplaatsen naar…</button>
+        ${admin ? `<button class="btn ghost sm danger" data-bulk="delete">${ICON.trash} Verwijderen</button>` : ""}
+        <span class="spacer"></span>
+        <button class="btn ghost sm" id="bulk-clear">Selectie opheffen</button>
+      </div>` : "";
+    const table = items.length ? `${bulkBar}<div class="panel"><table class="grid"><thead><tr>
+        ${mayEdit ? `<th class="sel"><input type="checkbox" id="sel-all" aria-label="Alles selecteren" /></th>` : ""}
         <th>Naam</th>${one ? "" : "<th>Soort</th>"}
         ${cols.map((c) => `<th>${esc(c.label)}</th>`).join("")}
         ${sharedLabels.map((l) => `<th>${esc(l)}</th>`).join("")}
         <th></th></tr></thead><tbody>
         ${items.map((i) => `<tr data-item="${esc(i.id)}" data-hay="${esc(hay(i))}">
-          <td><b>${esc(i.name)}</b>
+          ${selCell(i)}
+          <td>${liveDot(i)}<b>${esc(i.name)}</b>
             ${i.restricted ? ` <span class="tag warn" title="Alleen voor genoemde collega's">${ICON.lock}</span>` : ""}
             ${i.rmm_gone ? ' <span class="tag warn">niet meer in de RMM</span>' : ""}</td>
           ${one ? "" : `<td><span class="kind-cell">${typeCell(i)}</span></td>`}
@@ -551,7 +677,7 @@ window.DocItems = function (ctx) {
         <div style="font-size:12.5px;margin-top:6px"><a id="list-search-all" class="link">Zoek in alles
           van ${esc(org.name)}</a> — ook in wachtwoorden, documenten, contactpersonen en netwerkadapters.</div>
       </div></div>`;
-    host.innerHTML = `<div id="new-item"></div>${archiveHead}
+    host.innerHTML = `<div id="new-item"></div><div id="bulk-panel"></div><div id="bulk-result"></div>${archiveHead}
       <div class="list-bar">${items.length ? searchBox : ""}${inArchive ? "" : (chips || "<div></div>") + archiveBtn}</div>
       ${table}${none}`;
 
@@ -603,7 +729,72 @@ window.DocItems = function (ctx) {
     host.querySelectorAll("tr[data-item]").forEach((tr) => {
       tr.onclick = () => go(`#/klant/${org.id}/item/${tr.dataset.item}`);
     });
+    wireBulk(host, org, items);
+    if (lastFailed) {
+      host.querySelector("#bulk-result").innerHTML = failedHtml(lastFailed);
+      lastFailed = null;
+    }
     return sub;
+  }
+
+  function wireBulk(host, org, items) {
+    const bar = host.querySelector("#bulk-bar");
+    if (!bar) return;
+    const boxes = () => [...host.querySelectorAll("input[data-sel]")];
+    const chosen = () => boxes().filter((b) => b.checked).map((b) => b.dataset.sel);
+    const all = host.querySelector("#sel-all");
+    const update = () => {
+      const n = chosen().length;
+      bar.classList.toggle("hidden", !n);
+      host.querySelector("#bulk-n").textContent = `${n} geselecteerd`;
+      const shown = boxes().filter((b) => b.closest("tr").style.display !== "none");
+      all.checked = shown.length > 0 && shown.every((b) => b.checked);
+      all.indeterminate = !all.checked && shown.some((b) => b.checked);
+      boxes().forEach((b) => b.closest("tr").classList.toggle("selected", b.checked));
+    };
+    // A click on the box, or anywhere in its cell, selects -- it does not open the item.
+    host.querySelectorAll("td.sel").forEach((td) => {
+      td.onclick = (e) => {
+        e.stopPropagation();
+        if (e.target.tagName !== "INPUT") { const b = td.querySelector("input"); b.checked = !b.checked; }
+        update();
+      };
+    });
+    all.onclick = (e) => {
+      e.stopPropagation();
+      // What the search shows, not what it hides.
+      boxes().filter((b) => b.closest("tr").style.display !== "none").forEach((b) => { b.checked = all.checked; });
+      update();
+    };
+    host.querySelector("#bulk-clear").onclick = () => { boxes().forEach((b) => { b.checked = false; }); update(); };
+    const byId = Object.fromEntries(items.map((i) => [i.id, i]));
+    const done = (r) => {
+      // Said above the list once it is drawn again, with the new counts.
+      lastFailed = r.failed;
+      if (ctx.reload) ctx.reload();
+    };
+    bar.querySelectorAll("[data-bulk]").forEach((b) => {
+      b.onclick = async () => {
+        const ids = chosen();
+        if (!ids.length) return;
+        const action = b.dataset.bulk;
+        if (action === "move") {
+          await movePanel(host.querySelector("#bulk-panel"), org, ids.length,
+            async (to) => done(await bulk(org, "move", ids, { to_org: to })));
+          host.querySelector("#bulk-panel").scrollIntoView({ block: "nearest" });
+          return;
+        }
+        if (action === "delete") {
+          const synced = ids.filter((id) => byId[id] && kept(byId[id])).length;
+          if (!confirm(`${ids.length === 1 ? "Dit item" : `Deze ${ids.length} items`} definitief verwijderen — met hun `
+              + `geschiedenis, bestanden, notities en wachtwoorden? Dit kan niet ongedaan worden.`
+              + (synced ? `\n\n${synced} daarvan komen uit de RMM of Microsoft 365 en blijven staan: archiveer die.` : ""))) return;
+        }
+        b.disabled = true;
+        try { done(await bulk(org, action, ids)); } catch (e) { toast(e.message); b.disabled = false; }
+      };
+    });
+    update();
   }
 
   /* Adding something is a panel on the page, not a browser dialog: those are
@@ -716,7 +907,8 @@ window.DocItems = function (ctx) {
     const source = () => (item.source === "rmm"
       ? (item.rmm_gone
          ? `<span class="tag warn">niet meer in de RMM sinds ${when(item.rmm_seen_at)}</span>`
-         : `<span class="tag">uit de RMM, bijgewerkt ${when(item.rmm_seen_at)}</span>`)
+         : `<span class="tag">uit de RMM, bijgewerkt ${when(item.rmm_seen_at)}</span>`
+           + (liveState(item) ? ` <span class="tag ${liveState(item).kind}">${liveState(item).text}</span>` : ""))
       : item.source === "m365" ? `<span class="tag">uit Microsoft 365, bijgewerkt ${when(item.rmm_seen_at)}</span>`
       : `<span class="tag">hier vastgelegd</span>`);
 
@@ -1022,8 +1214,37 @@ window.DocItems = function (ctx) {
       act.innerHTML = editing ? "" : `
         <button class="btn ghost sm" id="btn-edit">${ICON.pencil} Bewerken</button>
         <button class="btn ghost sm" id="btn-copy" title="Een nieuw ${esc(spec.label.toLowerCase())} met deze gegevens">${ICON.copy} Kopie maken</button>
-        <button class="btn ghost sm" id="btn-archive">${item.archived ? ICON.refresh + " Uit archief halen" : ICON.box + " Archiveren"}</button>`;
+        <button class="btn ghost sm" id="btn-archive">${item.archived ? ICON.refresh + " Uit archief halen" : ICON.box + " Archiveren"}</button>
+        <button class="btn ghost sm" id="btn-move"${kept(item) ? ` disabled title="Dit komt uit ${fromWhere(item)}: verplaats het daar naar de andere klant"` : ""}>${ICON.external || ICON.link} Verplaatsen</button>
+        ${((ctx.me && ctx.me()) || {}).is_admin ? `<button class="btn ghost sm danger" id="btn-delete"${kept(item)
+          ? ` disabled title="Dit komt uit ${fromWhere(item)} en komt bij de volgende synchronisatie terug — archiveer het"` : ""}>${ICON.trash} Verwijderen</button>` : ""}`;
       if (editing) return;
+      const moveBtn = act.querySelector("#btn-move");
+      if (moveBtn && !moveBtn.disabled) moveBtn.onclick = async () => {
+        let slot = host.querySelector("#item-move");
+        if (!slot) {
+          slot = document.createElement("div");
+          slot.id = "item-move";
+          host.querySelector(".item-head").after(slot);
+        }
+        await movePanel(slot, org, 1, async (to) => {
+          const r = await bulk(org, "move", [item.id], { to_org: to });
+          if (r.done) go(`#/klant/${to}/item/${item.id}`);
+          else slot.innerHTML = failedHtml(r.failed);
+        });
+      };
+      const delBtn = act.querySelector("#btn-delete");
+      if (delBtn && !delBtn.disabled) delBtn.onclick = async () => {
+        if (!confirm(`${item.name} definitief verwijderen — met zijn geschiedenis, bestanden, notities en wachtwoorden? `
+            + "Dit kan niet ongedaan worden. Archiveren bewaart het.")) return;
+        try {
+          await api(`/api/items/${item.id}`, { method: "DELETE" });
+          forget(org.id);
+          toast(`${item.name} is verwijderd`);
+          const section = ctx.sectionOf && ctx.sectionOf(item.kind);
+          go(section ? `#/klant/${org.id}/${section.id}` : `#/klant/${org.id}/overzicht`);
+        } catch (e) { toast(e.message); }
+      };
       act.querySelector("#btn-edit").onclick = () => { editing = true; draw(); };
       act.querySelector("#btn-copy").onclick = () => {
         const section = ctx.sectionOf && ctx.sectionOf(item.kind);
@@ -2281,7 +2502,7 @@ window.DocItems = function (ctx) {
       if (item.archived) continue;
       for (const field of shownFieldsOf(item.kind)) {
         const flag = expiry(field, valueOf(item, field));
-        if (flag) out.push({ item, field, flag, on: valueOf(item, field) });
+        if (flag && flag.kind !== "ok") out.push({ item, field, flag, on: valueOf(item, field) });
       }
     }
     return out.sort((a, b) => String(a.on).localeCompare(String(b.on)));

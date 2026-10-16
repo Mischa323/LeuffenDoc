@@ -36,8 +36,8 @@ from . import database, schema, vault
 
 MAGIC = b"LEUFFENDOC-BACKUP\n"
 KINDS = {"auto": "Automatisch", "handmatig": "Handmatig", "geupload": "Geüpload",
-         "voor-terugzetten": "Vóór terugzetten"}
-_NAME = re.compile(r"^(auto|handmatig|geupload|voor-terugzetten)-\d{8}-\d{6}(-\d+)?\.db$")
+         "voor-terugzetten": "Vóór terugzetten", "voor-sleutel": "Vóór nieuwe sleutel"}
+_NAME = re.compile(r"^(auto|handmatig|geupload|voor-terugzetten|voor-sleutel)-\d{8}-\d{6}(-\d+)?\.db$")
 # Settings that belong to this installation rather than to its documentation:
 # putting a snapshot back must not sign everyone out, nor make this container
 # forget what its own image looks like.

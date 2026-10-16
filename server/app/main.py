@@ -720,6 +720,29 @@ async def archive_item(item_id: str, request: Request,
     return _decorate(updated, user)
 
 
+_FROM = {"rmm": "de RMM", "m365": "Microsoft 365"}
+
+
+def _kept_up(item: dict) -> bool:
+    """Kept in step from elsewhere right now -- and so put back by the next sync."""
+    return item.get("source") in schema.SYNCED and bool(item.get("rmm_device_id")) and not item.get("rmm_gone")
+
+
+def _why_not_delete(item: dict, together: set = frozenset()) -> str:
+    """Why this may not be deleted, or nothing. What else is deleted at the
+    same time (``together``) does not count as pointing at it."""
+    if _kept_up(item):
+        return (f"Dit komt uit {_FROM.get(item['source'], 'elders')} en komt bij de volgende synchronisatie "
+                "terug. Archiveer het, of haal het daar weg.")
+    pointing = [p for p in _referred_by(item) if p["id"] not in together]
+    if pointing:
+        names = ", ".join(sorted({p["name"] for p in pointing})[:3])
+        more = f" en nog {len(pointing) - 3}" if len(pointing) > 3 else ""
+        return (f"Hier wordt nog naar verwezen door {names}{more}. "
+                "Haal die verwijzing weg, of kies Archiveren in plaats van verwijderen.")
+    return ""
+
+
 @app.delete("/api/items/{item_id}")
 def remove_item(item_id: str, request: Request,
                 user: dict = Depends(auth.current_user)):
@@ -727,18 +750,86 @@ def remove_item(item_id: str, request: Request,
     archiving is what everyone else has, and it is what you want anyway."""
     item, _ = _item_for(user, item_id)
     auth.require_admin(user)
-    pointing = _referred_by(item)
-    if pointing:
-        names = ", ".join(sorted({p["name"] for p in pointing})[:3])
-        more = f" en nog {len(pointing) - 3}" if len(pointing) > 3 else ""
-        raise HTTPException(
-            status_code=409,
-            detail=f"Hier wordt nog naar verwezen door {names}{more}. "
-                   "Haal die verwijzing weg, of kies Archiveren in plaats van verwijderen.")
+    why = _why_not_delete(item)
+    if why:
+        raise HTTPException(status_code=409, detail=why)
     database.delete_item(item_id)
     database.audit("item.delete", user_email=user["email"], org_id=item["org_id"],
                    target=item["name"], ip=auth.client_ip(request))
     return {"status": "ok"}
+
+
+@app.post("/api/orgs/{org_id}/items/bulk")
+async def bulk_items(org_id: str, request: Request, user: dict = Depends(auth.current_user)):
+    """Several things at once: archived, put back, moved to another customer,
+    or deleted (an administrator's). Each is checked on its own; what may not
+    be done is named with the reason, and the rest goes ahead."""
+    org = _may_see(user, org_id, "edit")
+    body = await request.json()
+    action = str(body.get("action") or "")
+    ids = list(dict.fromkeys(str(x) for x in body.get("ids") or []))[:1000]
+    if action not in ("archive", "restore", "move", "delete"):
+        raise HTTPException(status_code=400, detail="Onbekende actie")
+    if not ids:
+        raise HTTPException(status_code=400, detail="Kies eerst wat")
+    if action == "delete":
+        auth.require_admin(user)
+    target = None
+    if action == "move":
+        to = str(body.get("to_org") or "")
+        if not to or to == org_id:
+            raise HTTPException(status_code=400, detail="Kies een andere klant om naartoe te verplaatsen")
+        target = _may_see(user, to, "edit")
+    hidden = _hidden(user)
+    items, failed = [], []
+    for item_id in ids:
+        item = database.get_item(item_id)
+        if not item or item["org_id"] != org_id or item_id in hidden:
+            failed.append({"id": item_id, "name": "", "reason": "Bestaat niet (meer) bij deze klant"})
+        else:
+            items.append(item)
+    chosen = {i["id"] for i in items}
+    done = []
+    if action in ("archive", "restore"):
+        archived = action == "archive"
+        for item in items:
+            if item["archived"] != archived:
+                database.set_archived(item["id"], archived, by=user["email"])
+            done.append(item)
+    elif action == "delete":
+        for item in items:
+            why = _why_not_delete(item, chosen)
+            if why:
+                failed.append({"id": item["id"], "name": item["name"], "reason": why})
+            else:
+                done.append(item)
+        for item in done:
+            database.delete_item(item["id"])
+    else:
+        for item in items:
+            if _kept_up(item):
+                failed.append({"id": item["id"], "name": item["name"],
+                               "reason": f"Dit komt uit {_FROM.get(item['source'], 'elders')}: verplaats het daar "
+                                         "naar de andere klant, dan volgt het hier vanzelf."})
+                continue
+            if item["rmm_device_id"]:
+                # Gone from the RMM, so it no longer mirrors anything: what was
+                # reported stays on the page, typed.
+                held = schema.rmm_held(item)
+                database.keep_reported(item["id"], {f["key"]: schema.value_of(item, f, held)
+                                                    for f in schema.fields_of(item["kind"]).values()
+                                                    if f.get("rmm") in held})
+            done.append(item)
+        refs = {kind: [(f["key"], f["label"]) for f in fields] for kind, fields in schema.ref_fields().items()}
+        database.move_items([i["id"] for i in done], target["id"], refs, user["email"])
+    if done:
+        verb = {"archive": "gearchiveerd", "restore": "teruggezet", "delete": "verwijderd",
+                "move": f"verplaatst naar {target['name'] if target else ''}"}[action]
+        names = ", ".join(i["name"] for i in done[:10]) + (f" en nog {len(done) - 10}" if len(done) > 10 else "")
+        database.audit(f"item.bulk.{action}", user_email=user["email"], org_id=org_id,
+                       target=f"{len(done)} item(s)", detail=f"{verb}: {names}", ip=auth.client_ip(request))
+    return {"done": len(done), "names": [i["name"] for i in done], "failed": failed,
+            "to": {"id": target["id"], "name": target["name"]} if target else None, "org": org["name"]}
 
 
 # --------------------------------------------------------------------------- #
@@ -2510,6 +2601,66 @@ def vault_overview(user: dict = Depends(auth.current_user)):
         "rotate": rotate, "old": old, "weak": weak, "reused": reused,
         "key": vault.state(),
     }
+
+
+@app.post("/api/admin/vault/key/reveal")
+def vault_key_reveal(request: Request, user: dict = Depends(auth.current_user)):
+    """The vault's key, to keep a copy elsewhere -- an administrator's, and in the log."""
+    auth.require_admin(user)
+    try:
+        key = vault.reveal()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    database.audit("vault.key.reveal", user_email=user["email"], ip=auth.client_ip(request))
+    return {"key": key}
+
+
+@app.post("/api/admin/vault/key/saved")
+def vault_key_saved(request: Request, user: dict = Depends(auth.current_user)):
+    """Somebody says they keep a copy of the key elsewhere."""
+    auth.require_admin(user)
+    if not vault.state()["in_database"]:
+        raise HTTPException(status_code=400, detail="De sleutel staat niet in de database")
+    vault.mark_saved(user["email"])
+    database.audit("vault.key.saved", user_email=user["email"], ip=auth.client_ip(request))
+    return vault.state()
+
+
+@app.post("/api/admin/vault/key")
+async def vault_key_replace(request: Request, user: dict = Depends(auth.current_user)):
+    """Put the vault under a new key -- one made here, or one of your own. A
+    snapshot is taken first, so this can always be put back."""
+    auth.require_admin(user)
+    body = await request.json()
+    own = str(body.get("key") or "").strip()
+    if vault.key_from_environment():
+        raise HTTPException(status_code=400, detail="De sleutel komt uit DOC_SECRET_KEY; vervang hem daar")
+    if own and len(own) < vault.MIN_OWN_KEY:
+        raise HTTPException(status_code=400,
+                            detail=f"Kies een sleutel of wachtwoordzin van minstens {vault.MIN_OWN_KEY} tekens")
+    before = backup.snapshot("voor-sleutel")
+    new = own or vault.new_key_text()
+    try:
+        counts = vault.rekey(new)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    database.audit("vault.rekey", user_email=user["email"], ip=auth.client_ip(request),
+                   detail=f"{counts['passwords']} wachtwoord(en), {counts['shares']} deellink(s), "
+                          f"{counts['settings']} instelling(en) opnieuw versleuteld; "
+                          f"back-up vooraf: {before['name']}")
+    return {"key": new, "counts": counts, "backup": before["name"], "state": vault.state()}
+
+
+@app.delete("/api/admin/vault/key/copy")
+def vault_key_forget_copy(request: Request, user: dict = Depends(auth.current_user)):
+    """With the key in the environment: the old copy in the database goes."""
+    auth.require_admin(user)
+    try:
+        vault.forget_copy()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    database.audit("vault.key.copy-removed", user_email=user["email"], ip=auth.client_ip(request))
+    return vault.state()
 
 
 @app.post("/api/vault/judge")

@@ -37,6 +37,9 @@ from . import database
 # Not "gearchiveerd": equipment that is out of use is archived, and one fact
 # belongs in one place.
 STATUS = ["In gebruik", "Reserve", "In reparatie"]
+# How a value reads at a glance (``tones``): ok is green, warn yellow, bad red,
+# info blue. A value is looked up whole, then by its first word ("Ja — app").
+STATUS_TONES = {"In gebruik": "ok", "Reserve": "info", "In reparatie": "warn"}
 
 # Whether equipment hangs in the rails of a patch cabinet, or stands -- on a
 # shelf or the bottom of it (see rack.py).
@@ -79,7 +82,7 @@ COMPUTER = {
         {"key": "wat", "label": "Wat het is", "fields": [
             _f("role", "Soort", "select", options=["Desktop", "Laptop", "Server",
                                                    "Virtuele machine", "NAS", "Tablet"]),
-            _f("status", "Status", "select", options=STATUS),
+            _f("status", "Status", "select", options=STATUS, tones=STATUS_TONES),
             _f("purpose", "Waar het voor dient", "textarea",
                hint="Waarom staat deze machine er — welke rol, welke toepassing."),
             _f("location", "Locatie", "ref", ref="location", icon="building"),
@@ -124,7 +127,7 @@ NETWORK = {
         {"key": "wat", "label": "Wat het is", "fields": [
             _f("role", "Soort", "select",
                options=["Router", "Switch", "Firewall", "Wifi-punt", "Modem", "Camera", "NVR"]),
-            _f("status", "Status", "select", options=STATUS),
+            _f("status", "Status", "select", options=STATUS, tones=STATUS_TONES),
             _f("ports", "Aantal poorten", "number", icon="network", rmm="port_count",
                hint="Alleen bij een switch. Hiermee wordt de poortenlijst opgebouwd."),
             _f("location", "Locatie", "ref", ref="location"),
@@ -180,7 +183,7 @@ PRINTER = {
         {"key": "wat", "label": "Wat het is", "fields": [
             _f("role", "Soort", "select",
                options=["Printer", "Multifunctional", "Labelprinter", "Plotter"]),
-            _f("status", "Status", "select", options=STATUS),
+            _f("status", "Status", "select", options=STATUS, tones=STATUS_TONES),
             _f("location", "Locatie", "ref", ref="location"),
             _f("placement", "Waar hij staat", hint="De ruimte of verdieping."),
         ]},
@@ -443,14 +446,16 @@ M365 = {
         ]},
         {"key": "beveiliging", "label": "Beveiliging", "width": "half", "fields": [
             _f("security_defaults", "Security defaults", "select", options=["Aan", "Uit"],
-               rmm="security_defaults", icon="shield"),
+               rmm="security_defaults", icon="shield", tones={"Aan": "ok", "Uit": "warn"}),
             _f("mfa", "Hoe MFA geregeld is", "select",
-               options=["Security defaults", "Conditional Access", "Per gebruiker", "Niet"]),
+               options=["Security defaults", "Conditional Access", "Per gebruiker", "Niet"],
+               tones={"Security defaults": "ok", "Conditional Access": "ok", "Per gebruiker": "warn", "Niet": "bad"}),
             _f("break_glass", "Noodaccount", icon="key",
                hint="Welk account; koppel het wachtwoord uit de kluis aan deze tenant."),
             _f("backup", "Back-up van Microsoft 365", hint="Waarmee, en hoe vaak."),
             _f("ca", "Conditional Access", "table", long=True, rmm="ca", icon="shieldCheck",
-               columns=_cols(("name", "Beleid"), ("state", "Staat"))),
+               columns=_cols(("name", "Beleid"),
+                             ("state", "Staat", {"tones": {"Aan": "ok", "Uit": "bad", "Alleen rapporteren": "warn"}}))),
         ]},
         {"key": "sharepoint", "label": "SharePoint", "fields": [
             _f("sites", "SharePoint-sites", "table", long=True, rmm="sites", icon="folder",
@@ -484,7 +489,8 @@ M365USER = {
     "columns": ["role", "upn", "department", "licenses", "last_sign_in"],
     "groups": [
         {"key": "account", "label": "Account", "width": "half", "fields": [
-            _f("role", "Soort", "select", options=["Gebruiker", "Gast", "Geblokkeerd"], rmm="role"),
+            _f("role", "Soort", "select", options=["Gebruiker", "Gast", "Geblokkeerd"], rmm="role",
+               tones={"Gebruiker": "ok", "Geblokkeerd": "bad"}),
             _f("upn", "Account", rmm="upn", icon="user"),
             _f("mail", "E-mailadres", rmm="mail", icon="mail"),
             _f("aliases", "Aliassen", "list", rmm="aliases"),
@@ -506,10 +512,10 @@ M365USER = {
                hint="Dezelfde persoon als contactpersoon van de klant."),
         ]},
         {"key": "beveiliging", "label": "Beveiliging", "width": "half", "fields": [
-            _f("mfa", "MFA", rmm="mfa", icon="shieldCheck"),
+            _f("mfa", "MFA", rmm="mfa", icon="shieldCheck", tones={"Ja": "ok", "Nee": "bad"}),
             _f("mfa_default", "Standaardmethode", rmm="mfa_default"),
             _f("roles", "Beheerdersrollen", "list", rmm="roles", icon="shield"),
-            _f("last_sign_in", "Laatst aangemeld", rmm="last_sign_in", icon="clock"),
+            _f("last_sign_in", "Laatst aangemeld", rmm="last_sign_in", icon="clock", stale=90),
             _f("last_sign_in_background", "Laatst actief op de achtergrond", rmm="last_sign_in_background"),
             _f("password_changed", "Wachtwoord gewijzigd", rmm="password_changed", icon="key"),
         ]},
@@ -523,7 +529,8 @@ M365USER = {
         ]},
         {"key": "apparaten", "label": "Apparaten", "fields": [
             _f("devices", "Apparaten in Intune", "table", long=True, rmm="devices", icon="desktop",
-               columns=_cols(("name", "Naam"), ("os", "Systeem"), ("compliance", "Voldoet"),
+               columns=_cols(("name", "Naam"), ("os", "Systeem"),
+                             ("compliance", "Voldoet", {"tones": {"Ja": "ok", "Nee": "bad", "Bijna": "warn"}}),
                              ("last_sync", "Laatst gezien"), ("model", "Model"), ("serial", "Serienummer"))),
         ]},
         {"key": "over", "label": "Over", "fields": [
@@ -685,7 +692,8 @@ LICENSE = {
                options=["Abonnement", "Eeuwigdurend", "Volumelicentie", "OEM", "Proef"]),
             _f("seats", "Aantal", "number", rmm="seats", hint="Hoeveel gebruikers of apparaten."),
             _f("seats_used", "In gebruik", "number", rmm="seats_used"),
-            _f("status", "Staat", rmm="status"),
+            _f("status", "Staat", rmm="status",
+               tones={"Actief": "ok", "Verloopt": "warn", "Opgeschort": "bad", "Opgezegd": "bad", "Geblokkeerd": "bad"}),
             _f("tenant", "Microsoft 365-tenant", "ref", ref="m365", rmm="tenant", icon="cloud"),
             _f("vendor", "Gekocht bij", "ref", ref="vendor", icon="box"),
             _f("license_key", "Licentiesleutel", "secret",
